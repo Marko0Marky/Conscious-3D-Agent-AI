@@ -1,5 +1,6 @@
 // --- START OF FILE three-dee-game.js ---
 import { clamp, logger } from './utils.js';
+import { LevelGenerator } from './level-generator.js'; // Import the new class
 
 // Assume THREE is globally available via CDN script tag in index.html
 
@@ -48,6 +49,9 @@ export class ThreeDeeGame {
         this.obstacles = [];
         this.walls = [];
         this.collidables = [];
+
+        // Initialize LevelGenerator
+        this.levelGenerator = new LevelGenerator(ThreeDeeGame.WORLD_SIZE, THREE); 
         
         this.reset();
     }
@@ -60,6 +64,7 @@ export class ThreeDeeGame {
     }
 
     reset() {
+        // 1. Full cleanup: Remove all old dynamic objects and dispose of their resources.
         const objectsToDisposeAndRemove = [];
         if (this.player) objectsToDisposeAndRemove.push(this.player);
         if (this.ai) objectsToDisposeAndRemove.push(this.ai);
@@ -85,6 +90,7 @@ export class ThreeDeeGame {
             }
         });
 
+        // Clear internal lists for a fresh start
         this.obstacles = [];
         this.walls = [];
         this.collidables = [];
@@ -92,6 +98,7 @@ export class ThreeDeeGame {
         
         const worldHalf = ThreeDeeGame.WORLD_SIZE / 2;
         
+        // Ground (Always recreate to ensure freshness and proper state)
         const groundGeom = new THREE.PlaneGeometry(ThreeDeeGame.WORLD_SIZE, ThreeDeeGame.WORLD_SIZE);
         const groundMat = new THREE.MeshStandardMaterial({ color: 0x2a2a4a });
         this.ground = new THREE.Mesh(groundGeom, groundMat);
@@ -101,120 +108,122 @@ export class ThreeDeeGame {
         this.scene.add(this.ground);
         this.collidables.push(this.ground);
 
-
-        const wallMat = new THREE.MeshStandardMaterial({ color: 0x4a4a6a });
-        const wallGeomH = new THREE.BoxGeometry(ThreeDeeGame.WORLD_SIZE + 2, 10, 2);
-        const wallGeomV = new THREE.BoxGeometry(2, 10, ThreeDeeGame.WORLD_SIZE + 2);
+        // --- NEW: Generate level using LevelGenerator ---
+        const levelData = this.levelGenerator.generateLevel(8); // Generate 8 obstacles
         
-        const createAndAddWall = (geom, mat, x, z, rotY = 0, name) => {
-            const wall = new THREE.Mesh(geom, mat);
-            wall.position.set(x, 5, z);
-            wall.rotation.y = rotY;
-            wall.castShadow = true;
-            wall.receiveShadow = true;
-            wall.name = name;
-            wall.position.x = clamp(wall.position.x, -worldHalf - 1, worldHalf + 1);
-            wall.position.z = clamp(wall.position.z, -worldHalf - 1, worldHalf + 1);
-
+        // Add walls from generator
+        levelData.walls.forEach(wall => {
             this.scene.add(wall);
             this.walls.push(wall);
             this.collidables.push(wall);
-        };
-
-        createAndAddWall(wallGeomH, wallMat, 0, -worldHalf, 0, 'wall1');
-        createAndAddWall(wallGeomH, wallMat, 0, worldHalf, 0, 'wall2');
-        createAndAddWall(wallGeomV, wallMat, -worldHalf, 0, 0, 'wall3');
-        createAndAddWall(wallGeomV, wallMat, worldHalf, 0, 0, 'wall4');
-
-
-        this.addObstacles(8);
-        this.obstacles.forEach(obstacle => {
-            if (obstacle && obstacle.isObject3D) {
-                this.collidables.push(obstacle);
-            } else {
-                logger.warn("Invalid obstacle found during reset; not adding to collidables.");
-            }
         });
 
+        // Add obstacles from generator
+        levelData.obstacles.forEach(obstacle => {
+            this.scene.add(obstacle);
+            this.obstacles.push(obstacle);
+            this.collidables.push(obstacle);
+        });
+        // --- END NEW LEVEL GENERATION ---
+
+        // Player Agent
         const playerGeom = new THREE.BoxGeometry(4, 4, 4);
         const playerMat = new THREE.MeshStandardMaterial({ color: 0xff9900 });
         this.player = new THREE.Mesh(playerGeom, playerMat);
         this.player.castShadow = true;
         this.player.name = 'player';
-        this.player.position.set(clamp(-worldHalf / 2, -worldHalf + 2, worldHalf - 2), 2, 0);
+        this.player.position.copy(levelData.spawnPoints.player); // Use generated spawn point
+        this.player.position.y = 2; // Ensure agent is above ground
         this.scene.add(this.player);
         this.collidables.push(this.player);
 
+        // AI Agent
         const aiGeom = new THREE.BoxGeometry(4, 4, 4);
         const aiMat = new THREE.MeshStandardMaterial({ color: 0x44aaff });
         this.ai = new THREE.Mesh(aiGeom, aiMat);
         this.ai.castShadow = true;
         this.ai.name = 'ai';
-        this.ai.position.set(clamp(worldHalf / 2, -worldHalf + 2, worldHalf - 2), 2, 0);
+        this.ai.position.copy(levelData.spawnPoints.ai); // Use generated spawn point
+        this.ai.position.y = 2; // Ensure agent is above ground
         this.scene.add(this.ai);
         this.collidables.push(this.ai);
         
+        // Player Target
         const pTargetGeom = new THREE.SphereGeometry(3, 16, 16);
         const pTargetMat = new THREE.MeshStandardMaterial({ color: 0xff9900, emissive: 0xaa6600 });
         this.playerTarget = new THREE.Mesh(pTargetGeom, pTargetMat);
         this.playerTarget.name = 'playerTarget';
         this.scene.add(this.playerTarget);
-        this.respawnTarget(this.playerTarget);
+        this.playerTarget.position.copy(levelData.targetPoints.player); // Use generated target point
+        this.playerTarget.position.y = 3; // Ensure target is above ground
         this.collidables.push(this.playerTarget);
 
+        // AI Target
         const aiTargetGeom = new THREE.SphereGeometry(3, 16, 16);
         const aiTargetMat = new THREE.MeshStandardMaterial({ color: 0x44aaff, emissive: 0x2288dd });
         this.aiTarget = new THREE.Mesh(aiTargetGeom, aiTargetMat);
         this.aiTarget.name = 'aiTarget';
         this.scene.add(this.aiTarget);
-        this.respawnTarget(this.aiTarget);
+        this.aiTarget.position.copy(levelData.targetPoints.ai); // Use generated target point
+        this.aiTarget.position.y = 3; // Ensure target is above ground
         this.collidables.push(this.aiTarget);
         
+        // Final filtering of collidables
         this.collidables = this.collidables.filter(obj => obj && obj.isObject3D);
 
         logger.info(`ThreeDeeGame reset completed. Total collidables: ${this.collidables.length}`);
     }
 
-    addObstacles(count) {
-        const worldHalf = ThreeDeeGame.WORLD_SIZE / 2;
-        const spawnArea = worldHalf * 0.8;
-        const obstacleMat = new THREE.MeshStandardMaterial({ color: 0x886688 });
-
-        for(let i = 0; i < count; i++) {
-            const sx = clamp(4 + Math.random() * 12, 1, 20);
-            const sz = clamp(4 + Math.random() * 12, 1, 20);
-            
-            const obstacleGeom = new THREE.BoxGeometry(sx, 10, sz);
-            const obstacle = new THREE.Mesh(obstacleGeom, obstacleMat);
-            
-            const ox = clamp((Math.random() - 0.5) * spawnArea, -worldHalf + sx / 2, worldHalf - sx / 2);
-            const oz = clamp((Math.random() - 0.5) * spawnArea, -worldHalf + sz / 2, worldHalf - sz / 2);
-
-            obstacle.position.set(ox, 5, oz);
-            obstacle.name = `obstacle-${i}`;
-            
-            if (!Number.isFinite(obstacle.position.x) || !Number.isFinite(obstacle.position.z)) {
-                logger.error(`Non-finite obstacle position detected during creation for obstacle ${i}! Skipping this obstacle.`);
-                continue;
-            }
-
-            obstacle.castShadow = true;
-            this.obstacles.push(obstacle);
-            this.scene.add(obstacle);
-        }
-    }
-
+    // This method is now handled by the LevelGenerator, so we can remove it.
+    // addObstacles(count) { ... }
 
     respawnTarget(target) {
+        // Find an empty spot on the grid
         const worldHalf = ThreeDeeGame.WORLD_SIZE / 2;
         const spawnRadius = worldHalf * 0.8;
-        const tx = clamp((Math.random()-0.5) * spawnRadius, -worldHalf + 5, worldHalf - 5);
-        const tz = clamp((Math.random()-0.5) * spawnRadius, -worldHalf + 5, worldHalf - 5);
+        let newPosFound = false;
+        let attempts = 0;
+        const maxAttempts = 50;
+        const minTargetDistance = 10; // Minimum distance from agents/other targets
 
-        target.position.set(tx, 3, tz);
-        
-        if (!Number.isFinite(target.position.x) || !Number.isFinite(target.position.z)) {
-            logger.error(`Non-finite target position detected during respawn! Resetting to default.`);
+        while (!newPosFound && attempts < maxAttempts) {
+            const tx = clamp((Math.random()-0.5) * spawnRadius, -worldHalf + 5, worldHalf - 5);
+            const tz = clamp((Math.random()-0.5) * spawnRadius, -worldHalf + 5, worldHalf - 5);
+            const potentialPos = new THREE.Vector3(tx, 3, tz);
+
+            let tooClose = false;
+            // Check distance to agents
+            if (potentialPos.distanceTo(this.player.position) < minTargetDistance ||
+                potentialPos.distanceTo(this.ai.position) < minTargetDistance) {
+                tooClose = true;
+            }
+            // Check distance to other target
+            if (target === this.playerTarget && potentialPos.distanceTo(this.aiTarget.position) < minTargetDistance) {
+                 tooClose = true;
+            }
+            if (target === this.aiTarget && potentialPos.distanceTo(this.playerTarget.position) < minTargetDistance) {
+                 tooClose = true;
+            }
+            // Check distance to obstacles (simple bounding box check)
+            for (const obstacle of this.obstacles) {
+                const obstacleBB = new THREE.Box3().setFromObject(obstacle);
+                const targetBB = new THREE.Box3().setFromCenterAndSize(potentialPos, new THREE.Vector3(6, 6, 6)); // Small bounding box for target
+                if (obstacleBB.intersectsBox(targetBB)) {
+                    tooClose = true;
+                    break;
+                }
+            }
+
+
+            if (!tooClose) {
+                target.position.copy(potentialPos);
+                newPosFound = true;
+            }
+            attempts++;
+        }
+
+        if (!newPosFound) {
+            logger.warn(`Could not find a clear spot for target respawn after ${maxAttempts} attempts. Placing at (0,3,0).`);
             target.position.set(0, 3, 0);
         }
     }
@@ -234,8 +243,8 @@ export class ThreeDeeGame {
         
         for(const obstacle of this.obstacles) {
             const obstacleBB = new THREE.Box3().setFromObject(obstacle);
-            if(playerBB.intersectsBox(obstacleBB)) pReward -= 0.5;
-            if(aiBB.intersectsBox(obstacleBB)) aReward -= 0.5;
+            if(playerBB.intersectsBox(obstacleBB)) pReward -= 0.05; // Reduced penalty
+            if(aiBB.intersectsBox(obstacleBB)) aReward -= 0.05; // Reduced penalty
         }
 
         const pDist = this.player.position.distanceTo(this.playerTarget.position);
@@ -312,14 +321,14 @@ export class ThreeDeeGame {
     applyActionToObject(action, object) {
         const prevPosition = object.position.clone();
 
-        if (action[0] === 1) {
+        if (action[0] === 1) { // Forward
             object.position.x += Math.sin(object.rotation.y) * ThreeDeeGame.AGENT_SPEED;
             object.position.z += Math.cos(object.rotation.y) * ThreeDeeGame.AGENT_SPEED;
         }
-        if (action[1] === 1) {
+        if (action[1] === 1) { // Turn Left
             object.rotation.y += ThreeDeeGame.AGENT_TURN_SPEED;
         }
-        if (action[2] === 1) {
+        if (action[2] === 1) { // Turn Right
             object.rotation.y -= ThreeDeeGame.AGENT_TURN_SPEED;
         }
 
