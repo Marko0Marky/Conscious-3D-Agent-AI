@@ -1,4 +1,3 @@
-
 // --- START OF FILE qualia-sheaf.js ---
 import { 
     clamp, dot, norm2, vecAdd, vecSub, vecScale, vecZeros, zeroMatrix, identity,
@@ -274,7 +273,16 @@ export class EnhancedQualiaSheaf {
             this.adaptSheafTopology();
             this.adjacencyMatrix = this.buildAdjacencyMatrix();
             this.laplacian = this.buildLaplacian();
-            this.maxEigApprox = await runWorkerTask('matrixSpectralNormApprox', { matrix: flattenMatrix(this.laplacian) }, 10000) || 1;
+
+            // Ensure flattenMatrix receives finite data and returns finite data
+            const flatLaplacian = flattenMatrix(this.laplacian);
+            if (!isFiniteMatrix(this.laplacian) || !isFiniteVector(flatLaplacian.flatData)) {
+                logger.error("Non-finite Laplacian matrix detected before spectral norm calculation. Defaulting maxEigApprox to 1.");
+                this.maxEigApprox = 1;
+            } else {
+                this.maxEigApprox = await runWorkerTask('matrixSpectralNormApprox', { matrix: flatLaplacian }, 10000) || 1;
+            }
+            
             this.projectionMatrices = await this.computeProjectionMatrices();
             if (!Number.isFinite(this.maxEigApprox) || this.maxEigApprox <= 0) {
                 logger.warn(`maxEigApprox was invalid (${this.maxEigApprox}). Resetting to 1.`);
@@ -316,7 +324,7 @@ export class EnhancedQualiaSheaf {
                 stalkValue = vecZeros(this.qDim);
                 this.stalks.set(vertexName, stalkValue);
             }
-            s.set(stalkValue.map(v => Number.isFinite(v) ? v : 0), currentOffset);
+            s.set(stalkValue.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0), currentOffset); // Ensure elements are finite and clamped
             currentOffset += this.qDim;
         }
 
@@ -347,7 +355,7 @@ export class EnhancedQualiaSheaf {
                 for (let qj = 0; qj < this.qDim; qj++) {
                     const val_uv = -weight * (P_uv[qi]?.[qj] || 0);
                     if (Number.isFinite(val_uv)) {
-                        Lfull[i * this.qDim + qi][j * this.qDim + qj] = val_uv;
+                        Lfull[i * this.qDim + qi][j * this.qDim + qj] = clamp(val_uv, -100, 100); // Clamp Lfull components
                     } else {
                         Lfull[i * this.qDim + qi][j * this.qDim + qj] = 0;
                     }
@@ -357,7 +365,7 @@ export class EnhancedQualiaSheaf {
                 for (let qj = 0; qj < this.qDim; qj++) {
                      const val_vu = -weight * (P_vu[qi]?.[qj] || 0);
                      if (Number.isFinite(val_vu)) {
-                        Lfull[j * this.qDim + qi][i * this.qDim + qj] = val_vu;
+                        Lfull[j * this.qDim + qi][i * this.qDim + qj] = clamp(val_vu, -100, 100); // Clamp Lfull components
                      } else {
                          Lfull[j * this.qDim + qi][i * this.qDim + qj] = 0;
                      }
@@ -373,7 +381,7 @@ export class EnhancedQualiaSheaf {
                 }
             }
             for (let qi = 0; qi < this.qDim; qi++) {
-                Lfull[i * this.qDim + qi][i * this.qDim + qi] = (Number.isFinite(degree) ? degree : 0) + this.eps;
+                Lfull[i * this.qDim + qi][i * this.qDim + qi] = clamp((Number.isFinite(degree) ? degree : 0) + this.eps, -100, 100); // Clamp Lfull components
             }
         }
 
@@ -387,12 +395,13 @@ export class EnhancedQualiaSheaf {
 
         const eta = this.gamma / Math.max(1, this.maxEigApprox);
         
+        // Ensure A is constructed robustly and its elements are clamped
         const A = identity(N).map((row, i) => new Float32Array(row.map((v, j) => {
             const val = v + eta * (Lfull[i]?.[j] || 0);
-            return Number.isFinite(val) ? val : 0;
+            return Number.isFinite(val) ? clamp(val, -100, 100) : 0; // Sanitize and clamp A elements
         })));
         
-        const rhs = vecAdd(s, vecScale(f_s, eta)).map(v => Number.isFinite(v) ? clamp(v, -10, 10) : 0);
+        const rhs = vecAdd(s, vecScale(f_s, eta)).map(v => Number.isFinite(v) ? clamp(v, -100, 100) : 0); // Explicitly sanitize rhs
 
         if (!isFiniteMatrix(A) || !isFiniteVector(rhs)) {
             logger.error('diffuseQualia: Matrix A or RHS vector contains non-finite values before CG solve. Skipping diffusion or using fallback.');
@@ -405,17 +414,21 @@ export class EnhancedQualiaSheaf {
         let sSolved;
         try {
             sSolved = await runWorkerTask('solveLinearSystemCG', { A: flattenMatrix(A), b: rhs, opts: { tol: 1e-6, maxIter: 15 } }, 5000);
+            if (!isFiniteVector(sSolved)) { // Check immediately after worker call
+                 logger.error('Worker returned non-finite sSolved from solveLinearSystemCG. Falling back to zeros.');
+                 sSolved = vecZeros(N);
+            }
         } catch (e) {
             logger.error('Error solving linear system in worker (CG). Falling back to zero vector:', e);
-            sSolved = new Float32Array(N).fill(0);
+            sSolved = vecZeros(N);
         }
 
         if (!isFiniteVector(sSolved)) {
             logger.error('CRITICAL: Solver output or fallback contained non-finite values. Resetting sSolved to zero vector.', { sSolved });
-            sSolved = new Float32Array(N).fill(0); 
+            sSolved = vecZeros(N); 
         }
         
-        const sNext = new Float32Array(sSolved.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0));
+        const sNext = new Float32Array(sSolved.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0)); // Ensure final stalk values are tightly clamped
 
         this._updateStalksAndWindow(sNext, n);
         await this._updateDerivedMetrics();
@@ -483,6 +496,7 @@ export class EnhancedQualiaSheaf {
         let rankB1, rankB2;
         try {
             rankB1 = await runWorkerTask('matrixRank', { matrix: flatBoundary1 }, 10000);
+            if (!Number.isFinite(rankB1)) rankB1 = 0;
         } catch (e) {
             logger.error('Error computing rankB1 in worker:', e);
             this.h1Dimension = 1;
@@ -491,6 +505,7 @@ export class EnhancedQualiaSheaf {
         }
         try {
             rankB2 = await runWorkerTask('matrixRank', { matrix: flatBoundary2 }, 10000);
+            if (!Number.isFinite(rankB2)) rankB2 = 0;
         } catch (e) {
             logger.error('Error computing rankB2 in worker:', e);
             this.h1Dimension = 1;
@@ -524,12 +539,16 @@ export class EnhancedQualiaSheaf {
             let projected_u;
             try {
                 projected_u = await runWorkerTask('matVecMul', { matrix: flattenMatrix(P_uv), vector: stalk_u }, 5000);
+                if (!isFiniteVector(projected_u)) {
+                    logger.warn(`Worker returned non-finite projected_u for edge ${u}-${v}. Setting to zeros.`);
+                    projected_u = vecZeros(this.qDim);
+                }
             } catch (e) {
                 logger.error(`Error projecting stalk_u for edge ${u}-${v} in worker:`, e);
                 projected_u = vecZeros(this.qDim);
             }
             
-            const safeProjected_u = isFiniteVector(projected_u) ? projected_u : vecZeros(this.qDim);
+            const safeProjected_u = isFiniteVector(projected_u) ? projected_u.map(v => clamp(v, -1, 1)) : vecZeros(this.qDim); // Clamp
             
             sum += norm2(vecSub(safeProjected_u, stalk_v));
         }
@@ -563,6 +582,10 @@ export class EnhancedQualiaSheaf {
         let cov;
         try {
             cov = await runWorkerTask('covarianceMatrix', { states: validStates, eps: this.eps }, 10000);
+            if (!isFiniteMatrix(cov)) {
+                 logger.warn("Worker returned non-finite covariance matrix. Setting MI to default.");
+                 cov = [[this.eps]]; // Fallback to minimal valid matrix
+            }
         } catch (e) {
             logger.error('Error computing covarianceMatrix in worker:', e);
             this.phi = clamp(0.5 + (this.gestaltUnity || 0.1) * (this.stability || 0.1), 0.01, 5);
@@ -570,7 +593,7 @@ export class EnhancedQualiaSheaf {
         }
 
         if (!isFiniteMatrix(cov)) {
-            logger.warn("Non-finite covariance matrix. Setting MI to default.");
+            logger.warn("Non-finite covariance matrix after worker call. Setting MI to default.");
             this.phi = clamp(0.5 + (this.gestaltUnity || 0.1) * (this.stability || 0.1), 0.01, 5);
             return;
         }
@@ -619,4 +642,4 @@ export class EnhancedQualiaSheaf {
         logger.info(`Tuned parameters: Alpha=${this.alpha.toFixed(3)}, Beta=${this.beta.toFixed(3)}, Gamma=${this.gamma.toFixed(3)}`);
     }
 }
-// --- END OF FILE qualia-sheaf.js --
+// --- END OF FILE qualia-sheaf.js ---
