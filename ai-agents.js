@@ -28,7 +28,7 @@ export class LearningAI {
         this.lastStateVec = vecZeros(this.worldModel.stateDim);
         this.lastActionIndex = 3; // Corresponds to 'IDLE'
         this.lastActivations = [];
-        this.avgQValue = 0;
+        this.avgStateValue = 0; // Renamed from avgQValue to avgStateValue for Critic
     }
 
     /**
@@ -84,6 +84,12 @@ export class LearningAI {
         return clampedStateVec;
     }
 
+    /**
+     * Makes a decision for the AI action based on epsilon-greedy policy.
+     * This now uses the Actor's policy (action probabilities) and the Critic's state value.
+     * @param {Object} gameState - The current game state.
+     * @returns {Promise<{action: number[], activations: Float32Array[], corrupted: boolean, chosenActionIndex: number}>}
+     */
     async makeDecision(gameState) {
         if (this.actionQueue.length >= this.aiResponseTime) {
             return this.actionQueue.shift();
@@ -95,12 +101,12 @@ export class LearningAI {
             { name: 'TURN_RIGHT', vec: [0, 0, 1, 0] },
             { name: 'IDLE', vec: [0, 0, 0, 1] }
         ];
-        let actionIndex = 3;
+        let actionIndex = 3; // Default to IDLE
 
         const stateVec = this.createStateVector(gameState);
         this.lastStateVec = stateVec;
 
-        const { qValues, activations, corrupted } = await this.worldModel.predict(stateVec);
+        const { actionProbs, stateValue, activations, corrupted } = await this.worldModel.predict(stateVec);
         this.lastActivations = activations;
 
         if (corrupted) {
@@ -111,16 +117,19 @@ export class LearningAI {
             return this.actionQueue.shift() || decision;
         }
 
+        this.avgStateValue = Number.isFinite(stateValue) ? stateValue : 0; // Update average state value for display
+
+        // Epsilon-greedy exploration on top of Actor's policy
         if (Math.random() < this.epsilon) {
             actionIndex = Math.floor(Math.random() * actions.length);
         } else {
-            if (qValues && isFiniteVector(qValues)) {
-                actionIndex = qValues.indexOf(Math.max(...qValues));
-                this.avgQValue = qValues.reduce((a, b) => a + b, 0) / qValues.length;
+            // Choose action based on actor's probability distribution
+            if (actionProbs && isFiniteVector(actionProbs)) {
+                // Simple argmax for greedy choice, but can also sample from distribution
+                actionIndex = actionProbs.indexOf(Math.max(...actionProbs));
             } else {
-                logger.warn(`LearningAI (${this.isPlayerTwo ? 'AI' : 'Opponent'}): Received invalid Q-values, defaulting to IDLE.`);
+                logger.warn(`LearningAI (${this.isPlayerTwo ? 'AI' : 'Opponent'}): Received invalid action probabilities, defaulting to IDLE.`);
                 actionIndex = 3;
-                this.avgQValue = 0;
             }
         }
         
@@ -131,13 +140,22 @@ export class LearningAI {
         return this.actionQueue.shift() || decision;
     }
 
+    /**
+     * Performs an Actor-Critic learning update step.
+     * @param {number} reward - The reward received from the environment.
+     * @param {Object} newGameState - The new state of the game.
+     * @param {boolean} isDone - True if the episode is finished.
+     * @returns {Promise<void>}
+     */
     async learn(reward, newGameState, isDone) {
         const nextStateVec = this.createStateVector(newGameState);
 
+        // Add intrinsic motivation
         const curiosityBonus = clamp(this.worldModel.predictionError, 0, 1) * 0.01;
         let totalReward = reward + curiosityBonus;
 
-        if (this.lastActionIndex === 3) {
+        // Add idle penalty
+        if (this.lastActionIndex === 3) { // 3 is the index for IDLE
             totalReward -= 0.01;
         }
         
@@ -152,10 +170,13 @@ export class LearningAI {
         this.epsilon = Number.isFinite(this.epsilon) ? this.epsilon : this.epsilonMin;
     }
 
+    /**
+     * Resets the AI's internal state and learning parameters.
+     */
     reset() {
         this.worldModel.resetRecurrentState();
         this.epsilon = 1.0;
-        this.avgQValue = 0;
+        this.avgStateValue = 0;
         this.actionQueue = [];
         this.learningRate = 0.01;
         logger.info(`LearningAI for ${this.isPlayerTwo ? 'AI' : 'Opponent'} has been reset.`);
