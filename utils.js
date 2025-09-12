@@ -364,16 +364,58 @@ function matrixRank(M_flat_data) {
     return rank;
 }
 
+// Phase 1B: Smith Normal Form approx over GF(2) - Gaussian elimination for rank
+function smithNormalFormGF2(matrixData) {
+    const M = unflattenMatrix(matrixData);
+    if (!isFiniteMatrix(M) || M.length === 0) {
+        // console.warn('Worker smithNormalFormGF2: Input matrix is non-finite or empty. Returning rank 0.');
+        return { rank: 0 };
+    }
+    let rank = 0;
+    const rows = M.length;
+    const cols = M[0].length;
+    const workingM = M.map(row => new Float32Array(row));  // Copy to avoid modifying original
+
+    for (let col = 0; col < cols && rank < rows; col++) {
+        // Find pivot
+        let pivotRow = rank;
+        for (let row = rank + 1; row < rows; row++) {
+            if (workingM[row][col] > workingM[pivotRow][col]) {  // Prefer 1 over 0
+                pivotRow = row;
+            }
+        }
+        if (workingM[pivotRow][col] !== 1) continue;  // No pivot (all zeros in this column below rank)
+
+        // Swap rows
+        [workingM[rank], workingM[pivotRow]] = [workingM[pivotRow], workingM[rank]];
+
+        // Eliminate
+        for (let row = 0; row < rows; row++) {
+            if (row !== rank && workingM[row][col] === 1) {
+                for (let j = col; j < cols; j++) {
+                    workingM[row][j] = (workingM[row][j] + workingM[rank][j]) % 2;  // XOR operation in GF(2)
+                }
+            }
+        }
+        rank++;
+    }
+    return { rank };
+}
+
+
 self.onmessage = function(e) {
     const { type, id, data } = e.data;
     let result;
     try {
         switch (type) {
             case 'transpose':
-                result = flattenMatrix(transpose(unflattenMatrix(data.matrix)));
+                const matrixToTranspose = unflattenMatrix(data.matrix); 
+                const transposedMatrix = transpose(matrixToTranspose);
+                result = flattenMatrix(transposedMatrix);
                 break;
             case 'matVecMul':
-                result = matVecMul(unflattenMatrix(data.matrix), data.vector);
+                const matrixForMatVecMul = unflattenMatrix(data.matrix);
+                result = matVecMul(matrixForMatVecMul, data.vector);
                 break;
             case 'solveLinearSystemCG':
                 result = solveLinearSystemCG(data.A, data.b, data.opts);
@@ -387,11 +429,14 @@ self.onmessage = function(e) {
             case 'matrixRank':
                 result = matrixRank(data.matrix);
                 break;
+            // Phase 1B: New task for homology rank
+            case 'smithNormalForm':
+                result = smithNormalFormGF2(data.matrix);
+                break;
             default:
                 result = { error: 'Unknown message type' };
                 break;
         }
-        
         self.postMessage({ type: type + 'Result', id, result });
     } catch (error) {
         console.error('Worker error for type ' + type + ':', error);
@@ -445,10 +490,15 @@ export function runWorkerTask(type, data, timeout = 10000) {
                         logger.error(`runWorkerTask: Invalid matrix from worker for ${type}. Forcing empty matrix.`, { result: reconstructedResult });
                         reconstructedResult = [];
                     }
-                } else if (type === 'matrixSpectralNormApprox' || type === 'matrixRank') {
+                } else if (type === 'matrixSpectralNormApprox') { // Direct numeric result
                     if (!Number.isFinite(reconstructedResult)) {
                         logger.error(`runWorkerTask: Invalid number from worker for ${type}. Forcing zero.`, { result: reconstructedResult });
                         reconstructedResult = 0;
+                    }
+                } else if (type === 'matrixRank' || type === 'smithNormalForm') { // Object with 'rank' property
+                    if (!Number.isFinite(reconstructedResult?.rank)) {
+                        logger.error(`runWorkerTask: Invalid rank from worker for ${type}. Forcing zero.`, { result: reconstructedResult });
+                        reconstructedResult = { rank: 0 };
                     }
                 } else if (type === 'transpose') {
                     if (!reconstructedResult || !reconstructedResult.flatData || !isFiniteVector(reconstructedResult.flatData)) {
@@ -574,8 +624,12 @@ export function isFiniteVector(v) {
     return true;
 }
 export function isFiniteMatrix(m) {
-    if (!Array.isArray(m) || m.length === 0) return true;
+    if (!Array.isArray(m)) return false; // If not an array, it's not a matrix.
+    if (m.length === 0) return true; // An empty array is a valid (but empty) matrix.
     const firstRowLength = m[0] && m[0].length !== undefined ? m[0].length : 0;
+    // The previous line 'if (m.length > 0 && firstRowLength === 0) return true;' can be removed or refined
+    // as the .every() check below should handle empty rows correctly if they exist.
+    // For simplicity, we can rely on .every() to check for valid rows and consistent length.
     return m.every(row => (Array.isArray(row) || row instanceof Float32Array) && row.length === firstRowLength && isFiniteVector(row));
 }
 export function flattenMatrix(matrix) {
@@ -611,7 +665,6 @@ export function logDeterminantFromDiagonal(M) {
     return s;
 }
 
-// ** FIX: Add softmax here and export it **
 /**
  * Helper function for softmax
  * @param {Float32Array} logits - The raw output from the actor head.
