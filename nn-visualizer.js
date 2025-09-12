@@ -1,0 +1,234 @@
+// --- START OF FILE nn-visualizer.js ---
+import { clamp, isFiniteVector, logger } from './utils.js';
+
+/**
+ * Visualizes the neural network structure and activity.
+ */
+export class NeuralNetworkVisualizer {
+    /**
+     * @param {string} containerId - The ID of the HTML container for the visualizer.
+     * @param {OntologicalWorldModel} worldModel - The OWM whose NN to visualize.
+     * @param {'main'|'opponent'} theme - The visual theme ('main' for blue, 'opponent' for orange).
+     */
+    constructor(containerId, worldModel, theme = 'main') {
+        this.container = document.getElementById(containerId);
+        this.worldModel = worldModel;
+        this.theme = theme;
+
+        if (!this.container || !this.worldModel) {
+            logger.error(`NNVisualizer: Container '${containerId}' or worldModel not found.`);
+            return;
+        }
+
+        this.neuronElements = [];
+        this.visualLayers = [];
+        this.MAX_NEURONS_TO_DISPLAY = 12;
+        this.lastChosenActionIndex = -1;
+
+        this._setupVisualLayers();
+        this._setupDOM();
+    }
+
+    _setupVisualLayers() {
+        const model = this.worldModel;
+        this.visualLayers.push({ name: 'input', actualCount: model.inputDim });
+        this.visualLayers.push({ name: 'cellState', actualCount: model.cellState.length });
+        this.visualLayers.push({ name: 'hiddenState', actualCount: model.hiddenState.length });
+        this.visualLayers.push({ name: 'qValues', actualCount: model.actionDim }); 
+    }
+
+    _setupDOM() {
+        this.container.innerHTML = '';
+
+        this.canvas = document.createElement('canvas');
+        this.canvas.className = 'nn-connections-canvas';
+        this.ctx = this.canvas.getContext('2d');
+        this.container.appendChild(this.canvas);
+
+        this.visualLayers.forEach((layer, lIndex) => {
+            const lDiv = document.createElement('div');
+            lDiv.className = 'nn-layer';
+            this.neuronElements[lIndex] = [];
+
+            const neuronsToDisplay = Math.min(layer.actualCount, this.MAX_NEURONS_TO_DISPLAY);
+            for (let i = 0; i < neuronsToDisplay; i++) {
+                const nDiv = document.createElement('div');
+                nDiv.className = 'nn-neuron';
+                lDiv.appendChild(nDiv);
+                this.neuronElements[lIndex].push(nDiv);
+            }
+            this.container.appendChild(lDiv);
+        });
+
+        const ro = new ResizeObserver(() => {
+            const dpr = window.devicePixelRatio || 1;
+            this.canvas.width = this.container.clientWidth * dpr;
+            this.canvas.height = this.container.clientHeight * dpr;
+            this.ctx.scale(dpr, dpr);
+            this._drawConnections();
+        });
+        ro.observe(this.container);
+    }
+    
+    _getNeuronPosition(lIndex, nIndex) {
+        const el = this.neuronElements[lIndex]?.[nIndex];
+        if (!el) {
+            const layerDiv = this.container.children[lIndex + 1];
+            if (!layerDiv) return { x: 0, y: 0 };
+            const layerRect = layerDiv.getBoundingClientRect();
+            const containerRect = this.container.getBoundingClientRect();
+            return {
+                x: (layerRect.left - containerRect.left) + layerRect.width / 2,
+                y: (layerRect.top - containerRect.top) + layerRect.height / 2
+            };
+        }
+
+        const r = el.getBoundingClientRect();
+        const cr = this.container.getBoundingClientRect();
+
+        return {
+            x: r.left - cr.left + r.width / 2,
+            y: r.top - cr.top + r.height / 2
+        };
+    }
+
+    _drawConnections() {
+        if (!this.ctx || !this.worldModel || this.neuronElements.length < 4) return;
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+        const model = this.worldModel;
+        
+        const hiddenStateNeurons = this.neuronElements[2];
+        const qValuesNeurons = this.neuronElements[3];
+
+        if (hiddenStateNeurons && qValuesNeurons && model.qValueHead && model.qValueHead.W) {
+            const weights_h_to_q = model.qValueHead.W;
+            const maxWeightAbs_h_to_q = 1.0;
+
+            for (let i = 0; i < hiddenStateNeurons.length; i++) {
+                const fromPos = this._getNeuronPosition(2, i);
+                const hiddenStateDataIndex = Math.floor(i * (model.hiddenState.length / hiddenStateNeurons.length));
+
+                for (let j = 0; j < qValuesNeurons.length; j++) {
+                    const toPos = this._getNeuronPosition(3, j);
+                    const qValueDataIndex = Math.floor(j * (model.actionDim / qValuesNeurons.length));
+
+                    const weight = weights_h_to_q[qValueDataIndex]?.[hiddenStateDataIndex] || 0;
+                    const absWeight = Math.abs(weight);
+                    const strength = clamp(absWeight / maxWeightAbs_h_to_q, 0, 1);
+
+                    this.ctx.beginPath();
+                    this.ctx.strokeStyle = weight > 0 
+                        ? `var(--connection-positive, rgba(0, 255, 153, ${0.1 + strength * 0.9}))`
+                        : `var(--connection-negative, rgba(255, 100, 100, ${0.1 + strength * 0.9}))`;
+                    
+                    if (absWeight < 0.05) {
+                        this.ctx.strokeStyle = `var(--connection-neutral, rgba(100, 100, 100, 0.1))`;
+                    }
+
+                    this.ctx.lineWidth = 0.5 + strength * 2.5;
+                    this.ctx.moveTo(fromPos.x, fromPos.y);
+                    this.ctx.lineTo(toPos.x, toPos.y);
+                    this.ctx.stroke();
+                }
+            }
+        }
+
+        const inputNeurons = this.neuronElements[0];
+        const cellStateNeurons = this.neuronElements[1];
+
+        if (inputNeurons && cellStateNeurons && model.Wc) {
+            const weights_input_to_c_tilde_candidate = model.Wc;
+            const maxWeightAbs_input_to_c = 0.5;
+
+            const inputFeatureCount = model.inputDim;
+
+            for (let i = 0; i < inputNeurons.length; i++) {
+                const fromPos = this._getNeuronPosition(0, i);
+                const inputDataIndex = Math.floor(i * (inputFeatureCount / inputNeurons.length));
+
+                for (let j = 0; j < cellStateNeurons.length; j++) {
+                    const toPos = this._getNeuronPosition(1, j);
+                    const cellStateDataIndex = Math.floor(j * (model.recurrentStateSize / cellStateNeurons.length));
+
+                    const weight = weights_input_to_c_tilde_candidate[cellStateDataIndex]?.[inputDataIndex] || 0;
+                    const absWeight = Math.abs(weight);
+                    const strength = clamp(absWeight / maxWeightAbs_input_to_c, 0, 1);
+
+                    this.ctx.beginPath();
+                    this.ctx.strokeStyle = weight > 
+                        0 ? `rgba(100, 200, 255, ${0.1 + strength * 0.7})`
+                        : `rgba(255, 150, 100, ${0.1 + strength * 0.7})`;
+
+                    if (absWeight < 0.05) {
+                        this.ctx.strokeStyle = `rgba(100, 100, 100, 0.05)`;
+                    }
+
+                    this.ctx.lineWidth = 0.3 + strength * 1.5;
+                    this.ctx.moveTo(fromPos.x, fromPos.y);
+                    this.ctx.lineTo(toPos.x, toPos.y);
+                    this.ctx.stroke();
+                }
+            }
+        }
+    }
+
+
+    update(activations, chosenActionIndex = -1) {
+        this.lastChosenActionIndex = chosenActionIndex;
+
+        if (!activations || activations.length === 0 || !activations.every(isFiniteVector)) {
+            this.visualLayers.forEach((layerViz, l_idx) => {
+                (this.neuronElements[l_idx] || []).forEach(el => {
+                    if (el) {
+                        el.style.backgroundColor = '#333';
+                        el.style.borderColor = '#888';
+                        el.style.boxShadow = 'none';
+                        el.classList.remove('active-action');
+                    }
+                });
+            });
+            this._drawConnections();
+            return;
+        }
+
+        const hues = this.theme === 'opponent' ? { pos: 39, neg: 271 } : { pos: 195, neg: 0 };
+
+        this.visualLayers.forEach((layerViz, l_idx) => {
+            const layerActivations = activations[l_idx];
+            if (!layerActivations || !isFiniteVector(layerActivations)) {
+                logger.warn(`NNVisualizer: Layer ${l_idx} activations are invalid.`);
+                return;
+            }
+
+            let maxAbs = 0;
+            for (const v of layerActivations) {
+                if (Number.isFinite(v) && Math.abs(v) > maxAbs) maxAbs = Math.abs(v);
+            }
+            const norm = maxAbs + 1e-9;
+
+            for (let n_idx = 0; n_idx < this.neuronElements[l_idx].length; n_idx++) {
+                const data_idx = Math.floor(n_idx * (layerActivations.length / this.neuronElements[l_idx].length));
+                const val = layerActivations[data_idx] || 0;
+                const intensity = clamp(Math.abs(val / norm), 0, 1);
+
+                const hue = val >= 0 ? hues.pos : hues.neg;
+                const lightness = clamp((0.1 + 0.9 * intensity) * 60, 10, 90);
+                const el = this.neuronElements[l_idx][n_idx];
+                if (el) {
+                    el.style.backgroundColor = `hsl(${hue},100%,${lightness}%)`;
+                    el.style.borderColor = `hsl(${hue},100%,${lightness * 1.2}%)`;
+                    el.style.boxShadow = `0 0 ${clamp(intensity * 8, 0, 8)}px hsl(${hue},100%,${lightness}%)`;
+                    
+                    if (l_idx === this.visualLayers.length - 1 && n_idx === chosenActionIndex && chosenActionIndex !== -1) {
+                        el.classList.add('active-action');
+                    } else {
+                        el.classList.remove('active-action');
+                    }
+                }
+            }
+        });
+        this._drawConnections();
+    }
+}
+// --- END OF FILE nn-visualizer.js ---
