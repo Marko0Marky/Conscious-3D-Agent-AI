@@ -3547,7 +3547,7 @@ class StrategicAI {
         /**
          * The main application class, orchestrating the game, AI, and UI updates.
          */
-        class MainApp {
+           class MainApp {
     constructor() {
         logger.info('MainApp Constructor started.');
         this.gameCanvas = document.getElementById('gameCanvas');
@@ -3596,7 +3596,8 @@ class StrategicAI {
         this.setupTooltips();
         this.bindEvents();
         this.setupQualiaAttentionPanel();
-        document.getElementById('status').textContent = 'Ready';
+        // Initial status should instruct the user, as we won't auto-start
+        document.getElementById('status').textContent = 'Initializing... Please wait.'; // Temporarily set to initializing
 
         this.setupGameAndAIs();
     }
@@ -3646,8 +3647,9 @@ class StrategicAI {
 
             this.game.render(); 
             this.updateVisualization();
-            this.start();
-            logger.info('Game and AIs initialized successfully. Starting simulation.');
+            // --- REMOVED: this.start(); ---
+            logger.info('Game and AIs initialized successfully. Awaiting user interaction.');
+            document.getElementById('status').textContent = 'Ready. Click "Toggle Simulation" to start.'; // Inform the user
 
         } catch (e) {
             logger.error('Failed to set up game and AIs:', e);
@@ -3781,7 +3783,7 @@ class StrategicAI {
 
             this.sheafGraphCtx.beginPath();
             this.sheafGraphCtx.moveTo(p1.x * (width - vWidth) + vWidth / 2, p1.y * (height - vHeight) + vHeight / 2);
-            this.sheafGraphCtx.lineTo(p2.x * (width - vWidth) + vHeight / 2, p2.y * (height - vHeight) + vHeight / 2); // Corrected `vHeight` to `vWidth` for x-axis consistency. No, this should be `vHeight` too. Let's make sure it's correct.
+            this.sheafGraphCtx.lineTo(p2.x * (width - vWidth) + vHeight / 2, p2.y * (height - vHeight) + vHeight / 2);
             this.sheafGraphCtx.stroke();
         });
     }
@@ -4033,15 +4035,11 @@ class StrategicAI {
         logger.info('Simulation stopped.');
     }
 
-    start() {
-        if (!this.game) return;
-        if (!this.isRunning) {
-            this.toggleGame();
-        }
-    }
+    // Removed the 'start()' method as it's no longer needed for auto-initiation.
+    // The 'toggleGame()' method will now be the primary entry point triggered by user.
 
     async resetAI() {
-        this.stop();
+        this.stop(); // This correctly sets isRunning to false
         logger.info('Resetting all game and AI states...');
         showLoading('game', 'Resetting Game...');
         showLoading('mainBrain', 'Resetting Main AI...');
@@ -4078,11 +4076,12 @@ class StrategicAI {
             this.opponentViz = new NeuralNetworkVisualizer('nn-visualization-container-opponent', this.opponent_worldModel, 'opponent');
 
             this.frameCount = 0;
-            document.getElementById('status').textContent = 'Ready';
+            // Update status to await user input after reset
+            document.getElementById('status').textContent = 'Reset Complete. Click "Toggle Simulation" to start.'; 
             this.updateVisualization();
             this.game.render();
-            logger.info('All states reset successfully.');
-            this.start();
+            logger.info('All states reset successfully. Awaiting user interaction.');
+            // --- REMOVED: this.start(); ---
 
         } catch (e) {
             logger.error('Error during reset:', e);
@@ -4145,7 +4144,9 @@ class StrategicAI {
             try {
                 const app = new MainApp();
                 positionVertices();
-                logger.info('UI initialized — ready.');
+                logger.info('UI initialized — ready. Awaiting user interaction.');
+                // --- IMPORTANT CHANGE: Don't auto-start here ---
+                // app.start(); // REMOVED
             } catch (e) {
                 document.getElementById('status').textContent = `Initialization Error: ${e.message}`;
                 logger.error('Initialization failed', e.message);
