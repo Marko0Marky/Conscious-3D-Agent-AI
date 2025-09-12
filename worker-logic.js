@@ -1,3 +1,5 @@
+// --- START OF FILE worker-logic.js ---
+// Self-contained worker utilities (no imports needed)
 
 function clamp(v, min, max) {
     const safeV = Number.isFinite(v) ? v : 0;
@@ -118,7 +120,10 @@ function solveLinearSystemCG(A_flat_data, b, opts={tol:1e-6, maxIter:200}) {
     const n = b.length;
 
     if (!isFiniteMatrix(A) || A.length !== n || (A.length > 0 && A[0].length !== n) || !isFiniteVector(b)) {
-        return new Float32Array(b.map(x => Number.isFinite(x) ? clamp(x, -1, 1) : 0));
+        // Fallback: Return a sanitized zero vector of expected size
+        const fallback = new Float32Array(n);
+        for(let i=0; i<n; i++) fallback[i] = Number.isFinite(b[i]) ? clamp(b[i], -1, 1) : 0;
+        return fallback;
     }
 
     let x = new Float32Array(n).fill(0);
@@ -126,7 +131,12 @@ function solveLinearSystemCG(A_flat_data, b, opts={tol:1e-6, maxIter:200}) {
     let p = new Float32Array(r);
     let rsold = dot(r, r);
 
-    if (!Number.isFinite(rsold) || rsold < 1e-20) return new Float32Array(x.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0));
+    if (!Number.isFinite(rsold) || rsold < 1e-20) {
+        // console.warn('Worker solveLinearSystemCG: Initial rsold is non-finite or too small. Returning sanitized x.');
+        const fallback = new Float32Array(n);
+        for(let i=0; i<n; i++) fallback[i] = Number.isFinite(x[i]) ? clamp(x[i], -1, 1) : 0;
+        return fallback;
+    }
 
     const Ap = new Float32Array(n);
     const maxIter = Math.min(opts.maxIter || 200, n * 5);
@@ -136,11 +146,13 @@ function solveLinearSystemCG(A_flat_data, b, opts={tol:1e-6, maxIter:200}) {
 
         const denom = dot(p, Ap);
         if (!Number.isFinite(denom) || denom <= 1e-20) {
+            // console.warn('Worker solveLinearSystemCG: Denominator is non-finite or too small. Breaking CG loop.');
             break;
         }
 
         const alpha = rsold / denom;
         if (!Number.isFinite(alpha)) {
+            // console.warn('Worker solveLinearSystemCG: Alpha is non-finite. Breaking CG loop.');
             break;
         }
 
@@ -149,12 +161,14 @@ function solveLinearSystemCG(A_flat_data, b, opts={tol:1e-6, maxIter:200}) {
 
         const rsnew = dot(r, r);
         if (!Number.isFinite(rsnew)) {
+            // console.warn('Worker solveLinearSystemCG: Rsnew is non-finite. Breaking CG loop.');
             break;
         }
         if (Math.sqrt(rsnew) < (opts.tol || 1e-6)) break;
 
         const beta = rsnew / (rsold + 1e-20);
         if (!Number.isFinite(beta)) {
+            // console.warn('Worker solveLinearSystemCG: Beta is non-finite. Breaking CG loop.');
             break;
         }
 
@@ -167,12 +181,14 @@ function solveLinearSystemCG(A_flat_data, b, opts={tol:1e-6, maxIter:200}) {
 function covarianceMatrix(states_array, eps = 1e-3) {
     const states = states_array.filter(s => isFiniteVector(s));
     if (!Array.isArray(states) || states.length < 2) {
+        // console.warn('Worker covarianceMatrix: Not enough valid states. Returning minimal matrix.');
         return [[eps]];
     }
     
     const n = states.length;
-    const d = states[0]?.length || 0;
+    const d = states[0] && states[0].length !== undefined ? states[0].length : 0;
     if (d === 0) {
+        // console.warn('Worker covarianceMatrix: State dimension is zero. Returning minimal matrix.');
         return [[eps]];
     }
 
@@ -204,6 +220,7 @@ function covarianceMatrix(states_array, eps = 1e-3) {
     for (let i = 0; i < d; i++) {
         for (let j = 0; j < d; j++) {
             if (!Number.isFinite(cov[i][j])) {
+                // console.warn('Worker covarianceMatrix: Non-finite element in covariance matrix. Setting to 0.');
                 cov[i][j] = 0;
             }
         }
@@ -215,6 +232,7 @@ function covarianceMatrix(states_array, eps = 1e-3) {
 function matrixSpectralNormApprox(M_flat_data, maxIter = 10) {
     const M = unflattenMatrix(M_flat_data);
     if (!isFiniteMatrix(M)) {
+        // console.warn('Worker matrixSpectralNormApprox: Input matrix is non-finite. Returning 0.');
         return 0;
     }
     let n = M.length;
@@ -225,6 +243,7 @@ function matrixSpectralNormApprox(M_flat_data, maxIter = 10) {
     for (let i = 0; i < maxIter; i++) {
         const Av = matVecMul(M, v);
         if (!isFiniteVector(Av)) {
+            // console.warn('Worker matrixSpectralNormApprox: Intermediate Av is non-finite. Returning 0.');
             return 0;
         }
         const norm = norm2(Av);
@@ -233,6 +252,7 @@ function matrixSpectralNormApprox(M_flat_data, maxIter = 10) {
     }
     const finalAv = matVecMul(M, v);
     if (!isFiniteVector(finalAv)) {
+        // console.warn('Worker matrixSpectralNormApprox: Final Av is non-finite. Returning 0.');
         return 0;
     }
     return norm2(finalAv);
@@ -241,6 +261,7 @@ function matrixSpectralNormApprox(M_flat_data, maxIter = 10) {
 function matrixRank(M_flat_data) {
     const M = unflattenMatrix(M_flat_data);
     if (!isFiniteMatrix(M)) {
+        // console.warn('Worker matrixRank: Input matrix is non-finite. Returning 0.');
         return 0;
     }
     const m = M.length;
@@ -281,6 +302,45 @@ function matrixRank(M_flat_data) {
     return rank;
 }
 
+// Phase 1B: Smith Normal Form approx over GF(2) - Gaussian elimination for rank
+function smithNormalFormGF2(matrixData) {
+    const M = unflattenMatrix(matrixData);
+    if (!isFiniteMatrix(M) || M.length === 0) {
+        // console.warn('Worker smithNormalFormGF2: Input matrix is non-finite or empty. Returning rank 0.');
+        return { rank: 0 };
+    }
+    let rank = 0;
+    const rows = M.length;
+    const cols = M[0].length;
+    const workingM = M.map(row => new Float32Array(row));  // Copy to avoid modifying original
+
+    for (let col = 0; col < cols && rank < rows; col++) {
+        // Find pivot
+        let pivotRow = rank;
+        for (let row = rank + 1; row < rows; row++) {
+            if (workingM[row][col] > workingM[pivotRow][col]) {  // Prefer 1 over 0
+                pivotRow = row;
+            }
+        }
+        if (workingM[pivotRow][col] !== 1) continue;  // No pivot (all zeros in this column below rank)
+
+        // Swap rows
+        [workingM[rank], workingM[pivotRow]] = [workingM[pivotRow], workingM[rank]];
+
+        // Eliminate
+        for (let row = 0; row < rows; row++) {
+            if (row !== rank && workingM[row][col] === 1) {
+                for (let j = col; j < cols; j++) {
+                    workingM[row][j] = (workingM[row][j] + workingM[rank][j]) % 2;  // XOR operation in GF(2)
+                }
+            }
+        }
+        rank++;
+    }
+    return { rank };
+}
+
+
 self.onmessage = function(e) {
     const { type, id, data } = e.data;
     let result;
@@ -307,6 +367,10 @@ self.onmessage = function(e) {
             case 'matrixRank':
                 result = matrixRank(data.matrix);
                 break;
+            // Phase 1B: New task for homology rank
+            case 'smithNormalForm':
+                result = smithNormalFormGF2(data.matrix);
+                break;
             default:
                 result = { error: 'Unknown message type' };
                 break;
@@ -314,6 +378,7 @@ self.onmessage = function(e) {
         self.postMessage({ type: type + 'Result', id, result });
     } catch (error) {
         console.error('Worker error for type ' + type + ':', error);
-        self.postMessage({ type: type + 'Error', id, error: error.message });
+        self.postMessage({ type: type + 'Error', id, error: error.message || error.toString() });
     }
 };
+// --- END OF FILE worker-logic.js ---
