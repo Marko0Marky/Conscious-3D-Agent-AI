@@ -11,7 +11,7 @@ import { initConceptVisualization, cleanupConceptVisualization, renderConceptVis
 import * as THREE from 'three';
 
 // Explicitly reference the global TensorFlow.js object
-const tf = window.tf; // ADDED THIS LINE
+const tf = window.tf;
 
 // Global for positioning vertex divs
 const sheafVertexPositions = {
@@ -109,6 +109,7 @@ class MainApp {
 
             logger.info("Visualizations initialized successfully.");
 
+            // Instantiate LearningAI agents
             this.mainAI = new LearningAI(this.mainAI_worldModel, this.game, true);
             this.opponentAI = new LearningAI(this.opponent_worldModel, this.game, false);
             this.mainStrategicAI = new StrategicAI(this.mainAI);
@@ -246,7 +247,7 @@ class MainApp {
                 updateLive2DEmotions(emotionTensor, this.game.score.ai > this.game.score.player ? 'nod' : 'idle');
                 updateLive2D(this.clock.getDelta());
                 // Use the local tf variable here
-                if (tf && tf.isTensor(emotionTensor)) tf.dispose(emotionTensor); // MODIFIED THIS LINE
+                if (tf && typeof tf.isTensor === 'function' && tf.isTensor(emotionTensor)) tf.dispose(emotionTensor);
             }
             if (isConceptVisualizationReady()) {
                 const gameState = this.game.getState();
@@ -302,7 +303,7 @@ class MainApp {
         tippy('#betaSlider', { content: 'β (Beta) adjusts the overall diffusion strength and speed across the sheaf; higher values lead to faster qualia propagation and integration.' });
         tippy('#gammaSlider', { content: 'γ (Gamma) sets the inertia for qualia updates and acts as an effective learning rate for diffusion; higher values imply quicker adaptation.' });
         tippy('#toggleSimButton', { content: 'Toggles the simulation run/pause state. (Spacebar)' });
-        tippy('#resetSimButton', { content: 'R1esets the game, AI states, and world models to their initial configurations. (R key)' });
+        tippy('#resetSimButton', { content: 'Resets the game, AI states, and world models to their initial configurations. (R key)' });
         tippy('#tuneButton', { content: 'Adaptively adjusts AI parameters (α, β, γ) based on real-time system stability and consciousness metrics, aiming for optimal performance. (T key)' });
         tippy('#pauseButton', { content: 'Pauses the simulation if it is currently running. (P key or Spacebar)' });
         tippy('#stepButton', { content: 'Advances the simulation by a single frame/step. (S key)' });
@@ -419,7 +420,7 @@ class MainApp {
 
     async gameLoop(timestamp, isManualStep = false) {
         if (!this.isRunning && !isManualStep) return;
-        if (!this.mainAI_worldModel?.ready || !this.opponent_worldModel?.ready || !this.game) {
+        if (!this.mainAI_worldModel?.ready || !this.opponent_worldModel?.ready || !this.game || !this.mainAI || !this.opponentAI) { // Added checks for mainAI and opponentAI
             if (!isManualStep) requestAnimationFrame(this.boundGameLoop);
             return;
         }
@@ -542,6 +543,7 @@ class MainApp {
                 initLive2D(this.clock, this.mainAI_worldModel.qualiaSheaf),
                 initConceptVisualization(this.clock, this.mainAI_worldModel.qualiaSheaf)
             ]);
+            // Re-instantiate LearningAI agents and StrategicAIs
             this.mainAI = new LearningAI(this.mainAI_worldModel, this.game, true);
             this.opponentAI = new LearningAI(this.opponent_worldModel, this.game, false);
             this.mainStrategicAI = new StrategicAI(this.mainAI);
