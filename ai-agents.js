@@ -1,4 +1,5 @@
 // --- START OF FILE ai-agents.js ---
+// --- MERGED VERSION: Prioritizing Actor-Critic compatibility from second file, incorporating full learn args from first ---
 import { OntologicalWorldModel } from './owm.js';
 import { clamp, vecZeros, isFiniteVector, logger, norm2 } from './utils.js';
 
@@ -142,12 +143,18 @@ export class LearningAI {
 
     /**
      * Performs an Actor-Critic learning update step.
+     * @param {Object} preGameState - The game state before the action was taken.
+     * @param {number} actionIndex - The index of the action that was taken.
      * @param {number} reward - The reward received from the environment.
      * @param {Object} newGameState - The new state of the game.
      * @param {boolean} isDone - True if the episode is finished.
      * @returns {Promise<void>}
      */
-    async learn(reward, newGameState, isDone) {
+    async learn(preGameState, actionIndex, reward, newGameState, isDone) {
+        // Ensure state vectors are created if preGameState provided (compatibility with first file)
+        if (preGameState) {
+            this.lastStateVec = this.createStateVector(preGameState);
+        }
         const nextStateVec = this.createStateVector(newGameState);
 
         // Add intrinsic motivation
@@ -155,11 +162,11 @@ export class LearningAI {
         let totalReward = reward + curiosityBonus;
 
         // Add idle penalty
-        if (this.lastActionIndex === 3) { // 3 is the index for IDLE
+        if (actionIndex === 3) { // 3 is the index for IDLE
             totalReward -= 0.01;
         }
         
-        await this.worldModel.learn(this.lastStateVec, this.lastActionIndex, totalReward, nextStateVec, isDone, this.learningRate);
+        await this.worldModel.learn(this.lastStateVec, actionIndex, totalReward, nextStateVec, isDone, this.learningRate);
         
         if (this.epsilon > this.epsilonMin) {
             this.epsilon *= this.epsilonDecay;
