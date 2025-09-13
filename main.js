@@ -56,6 +56,8 @@ class MainApp {
         this.isFastForward = false;
         this.FAST_FORWARD_MULTIPLIER = 3;
         this.frameCount = 0;
+        this.sheafStepCount = 0; // NEW: Counter for sheaf adaptation steps
+        this.sheafAdaptFrequency = 100; // NEW: Adapt every 100 frames
         this.game = null;
         this.lastPhi = 0;
         this.boundGameLoop = this.gameLoop.bind(this);
@@ -175,7 +177,7 @@ class MainApp {
 
         for (let i = 0; i < qDim; i++) {
             const avgValue = aggregateStalk[i] / numVertices;
-            const intensity = Math.abs(avgValue);
+            // const intensity = Math.abs(avgValue); // Not used
             const clampedValue = clamp(avgValue, 0, 1);
 
             const fillElement = document.getElementById(`qualia-${entityNames[i]}-fill`);
@@ -212,6 +214,7 @@ class MainApp {
         if (count > 0) avgQualia.forEach((_, i) => avgQualia[i] /= count);
         const qualiaValues = avgQualia.map(v => Number.isFinite(v) ? clamp(v, 0, 1) : 0);
 
+        // Update individual qualia values for display
         document.getElementById('being-value').textContent = qualiaValues[0].toFixed(3);
         document.getElementById('intent-value').textContent = qualiaValues[1].toFixed(3);
         document.getElementById('existence-value').textContent = qualiaValues[2].toFixed(3);
@@ -252,7 +255,7 @@ class MainApp {
             if (isConceptVisualizationReady()) {
                 const gameState = this.game.getState();
                 const augmentedGameState = { ...gameState, dist: Math.sqrt(Math.pow(gameState.aiTarget.x - gameState.ai.x, 2) + Math.pow(gameState.aiTarget.z - gameState.ai.z, 2)) };
-                updateAgentSimulationVisuals(null, augmentedGameState, qualia.phi);
+                updateAgentSimulationVisuals(this.mainAI_worldModel.qualiaSheaf, augmentedGameState, qualia.phi); // Updated call for concept viz
                 animateConceptNodes(this.clock.getDelta());
                 renderConceptVisualization();
             }
@@ -420,7 +423,7 @@ class MainApp {
 
     async gameLoop(timestamp, isManualStep = false) {
         if (!this.isRunning && !isManualStep) return;
-        if (!this.mainAI_worldModel?.ready || !this.opponent_worldModel?.ready || !this.game || !this.mainAI || !this.opponentAI) { // Added checks for mainAI and opponentAI
+        if (!this.mainAI_worldModel?.ready || !this.opponent_worldModel?.ready || !this.game || !this.mainAI || !this.opponentAI) {
             if (!isManualStep) requestAnimationFrame(this.boundGameLoop);
             return;
         }
@@ -430,6 +433,8 @@ class MainApp {
             let mainDecision, opponentDecision;
             for (let step = 0; step < stepsPerFrame; step++) {
                 this.frameCount++;
+                this.sheafStepCount++; // Increment sheaf step count
+                
                 const preGameState = this.game.getState();
                 [mainDecision, opponentDecision] = await Promise.all([
                     this.mainAI.makeDecision(preGameState),
@@ -447,10 +452,18 @@ class MainApp {
                 ]);
                 this.mainStrategicAI.observe(gameUpdateResult.aReward);
                 this.opponentStrategicAI.observe(gameUpdateResult.pReward);
+
+                // Phase 2.1: Dynamic Sheaf Topology Adaptation
+                if (this.sheafStepCount % this.sheafAdaptFrequency === 0) {
+                    await this.mainAI_worldModel.qualiaSheaf.computeCorrelationMatrix(); // This now includes adaptation
+                    await this.opponent_worldModel.qualiaSheaf.computeCorrelationMatrix();
+                    logger.info(`Sheaf adaptation triggered at step ${this.sheafStepCount}.`);
+                }
+
                 if (this.frameCount % 50 === 0) {
                     this.mainStrategicAI.modulateParameters();
                     this.opponentStrategicAI.modulateParameters();
-                    await this.mainAI_worldModel.qualiaSheaf.tuneParameters();
+                    // this.mainAI_worldModel.qualiaSheaf.tuneParameters() is called by strategic AI now if needed.
                 }
             }
             document.getElementById('player-score').textContent = this.game.score.player;
@@ -551,6 +564,7 @@ class MainApp {
             this.mainViz.worldModel = this.mainAI_worldModel;
             this.opponentViz.worldModel = this.opponent_worldModel;
             this.frameCount = 0;
+            this.sheafStepCount = 0; // Reset sheaf step count
             this.chartData = { stateValue: [], predError: [], epsilon: [], score: [] };
             this.updatePerformanceCharts();
             this.updateVisualization();
@@ -569,6 +583,8 @@ class MainApp {
 
     async tuneParameters() {
         if (!this.mainAI_worldModel?.ready) return;
+        // The tuneParameters on sheaf is now called as part of strategic AI modulation
+        // For manual tune, we can call it directly
         await this.mainAI_worldModel.qualiaSheaf.tuneParameters();
         await this.opponent_worldModel.qualiaSheaf.tuneParameters();
         const paramIds = ['alpha-param', 'beta-param', 'gamma-param'];
@@ -618,7 +634,7 @@ async function bootstrapApp() {
             const graph = document.getElementById('sheafGraph');
             if (!graph) return;
             const rect = graph.getBoundingClientRect();
-            const v_count = 8;
+            const v_count = 8; // Assuming 8 vertices based on current sheaf setup
             for (let i = 0; i < v_count; i++) {
                 const v = document.getElementById('vertex-' + i);
                 if (!v) continue;
@@ -650,3 +666,4 @@ window.addEventListener('beforeunload', () => {
         logger.info('TensorFlow.js resources disposed during unload.');
     }
 });
+// --- END OF FILE main.js ---
