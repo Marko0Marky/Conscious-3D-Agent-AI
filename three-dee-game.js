@@ -1,12 +1,10 @@
-// --- START OF FILE three-dee-game.js ---
-import { clamp, logger } from './utils.js';
-import { LevelGenerator } from './level-generator.js'; // Import the new class
+ // --- START OF FILE three-dee-game.js ---
+ import { clamp, logger } from './utils.js';
+ import { LevelGenerator } from './level-generator.js'; // Import the new class
 
-// Assume THREE is globally available via CDN script tag in index.html
+import * as THREE from 'three'; // Changed to bare specifier 'three'
+import { BufferGeometryUtils } from 'three/examples/jsm/utils/BufferGeometryUtils.js'; // Changed to bare specifier for jsm utility
 
-/**
- * Represents the 3D game environment, handling physics, scoring, and rendering with Three.js.
- */
 export class ThreeDeeGame {
     static WORLD_SIZE = 100;
     static AGENT_SPEED = 0.8;
@@ -47,7 +45,7 @@ export class ThreeDeeGame {
         this.aiTarget = null;
         this.ground = null;
         this.obstacles = [];
-        this.walls = [];
+        this.mergedWallsMesh = null; // New property for merged walls
         this.collidables = [];
 
         // Initialize LevelGenerator
@@ -70,9 +68,9 @@ export class ThreeDeeGame {
         if (this.ai) objectsToDisposeAndRemove.push(this.ai);
         if (this.playerTarget) objectsToDisposeAndRemove.push(this.playerTarget);
         if (this.aiTarget) objectsToDisposeAndRemove.push(this.aiTarget);
-        this.walls.forEach(w => objectsToDisposeAndRemove.push(w));
         this.obstacles.forEach(o => objectsToDisposeAndRemove.push(o));
         if (this.ground) objectsToDisposeAndRemove.push(this.ground);
+        if (this.mergedWallsMesh) objectsToDisposeAndRemove.push(this.mergedWallsMesh); // Include merged walls
 
         objectsToDisposeAndRemove.forEach(obj => {
             if (obj.parent) {
@@ -92,7 +90,6 @@ export class ThreeDeeGame {
 
         // Clear internal lists for a fresh start
         this.obstacles = [];
-        this.walls = [];
         this.collidables = [];
         this.score = { ai: 0, player: 0 };
         
@@ -111,12 +108,27 @@ export class ThreeDeeGame {
         // --- NEW: Generate level using LevelGenerator ---
         const levelData = this.levelGenerator.generateLevel(8); // Generate 8 obstacles
         
-        // Add walls from generator
+        // MERGE STATIC WALLS FOR PERFORMANCE
+        const wallGeometries = [];
         levelData.walls.forEach(wall => {
-            this.scene.add(wall);
-            this.walls.push(wall);
-            this.collidables.push(wall);
+            wall.updateMatrixWorld(true); // Ensure world matrix is updated for correct merging
+            const geom = wall.geometry.clone();
+            geom.applyMatrix4(wall.matrixWorld);
+            wallGeometries.push(geom);
+            // No need to add individual walls to scene if they are merged
+            // We'll add the merged mesh later
         });
+
+        if (wallGeometries.length > 0) {
+            const mergedWallGeometry = BufferGeometryUtils.mergeBufferGeometries(wallGeometries);
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0x4a4a6a }); // Shared material
+            this.mergedWallsMesh = new THREE.Mesh(mergedWallGeometry, wallMat);
+            this.mergedWallsMesh.name = 'mergedWalls';
+            this.mergedWallsMesh.castShadow = true;
+            this.mergedWallsMesh.receiveShadow = true;
+            this.scene.add(this.mergedWallsMesh);
+            this.collidables.push(this.mergedWallsMesh);
+        }
 
         // Add obstacles from generator
         levelData.obstacles.forEach(obstacle => {
@@ -173,9 +185,6 @@ export class ThreeDeeGame {
 
         logger.info(`ThreeDeeGame reset completed. Total collidables: ${this.collidables.length}`);
     }
-
-    // This method is now handled by the LevelGenerator, so we can remove it.
-    // addObstacles(count) { ... }
 
     respawnTarget(target) {
         // Find an empty spot on the grid
@@ -395,4 +404,3 @@ export class ThreeDeeGame {
         }
     }
 }
-// --- END OF FILE three-dee-game.js ---
