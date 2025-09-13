@@ -1,7 +1,7 @@
 // --- START OF FILE qualia-sheaf.js ---
 import { 
     clamp, dot, norm2, vecAdd, vecSub, vecScale, vecZeros, zeroMatrix, isFiniteVector, isFiniteMatrix, flattenMatrix, unflattenMatrix, logDeterminantFromDiagonal,
-    logger, runWorkerTask, identity // Ensure identity is imported from utils
+    logger, runWorkerTask, identity
 } from './utils.js';
 
 /**
@@ -27,27 +27,26 @@ export class EnhancedQualiaSheaf {
         
         const defaultVertices = ['agent_x', 'agent_z', 'agent_rot', 'target_x', 'target_z', 'vec_dx', 'vec_dz', 'dist_target'];
 
-        const initialGraphVertices = graphData?.vertices && Array.isArray(graphData.vertices) && graphData.vertices.length >= defaultVertices.length ? graphData.vertices : defaultVertices;
+        const initialGraphVertices = Array.isArray(graphData?.vertices) && graphData.vertices.length >= defaultVertices.length ? graphData.vertices : defaultVertices;
 
-        const initialBaseEdges = graphData?.edges && Array.isArray(graphData.edges) ? graphData.edges.slice(0, 15) : [
+        const initialBaseEdges = Array.isArray(graphData?.edges) ? graphData.edges.slice() : [
             ['agent_x', 'agent_rot'], ['agent_z', 'agent_rot'],
             ['agent_x', 'vec_dx'], ['agent_z', 'vec_dz'],
             ['target_x', 'vec_dx'], ['target_z', 'vec_dz'],
             ['vec_dx', 'dist_target'], ['vec_dz', 'dist_target']
         ];
         
-        const explicitTriangles = graphData?.triangles && Array.isArray(graphData.triangles) ? graphData.triangles : [
+        const explicitTriangles = Array.isArray(graphData?.triangles) ? graphData.triangles.slice() : [
              ['agent_x', 'agent_z', 'agent_rot'],
              ['target_x', 'target_z', 'dist_target'],
              ['agent_x', 'target_x', 'vec_dx'],
              ['agent_z', 'target_z', 'vec_dz']
         ];
 
-        // Phase 1B: Tetrahedra support
-        const explicitTetrahedra = graphData?.tetrahedra && Array.isArray(graphData.tetrahedra) ? graphData.tetrahedra : [
-            ['agent_x', 'agent_z', 'target_x', 'target_z'],  // Example: Spatial frame
-            ['agent_x', 'target_x', 'vec_dx', 'dist_target'], // Example: Directional pursuit context
-            ['agent_rot', 'vec_dx', 'vec_dz', 'dist_target']  // Example: Orientational loop with direction vectors
+        const explicitTetrahedra = Array.isArray(graphData?.tetrahedra) ? graphData.tetrahedra.slice() : [
+            ['agent_x', 'agent_z', 'target_x', 'target_z'],
+            ['agent_x', 'target_x', 'vec_dx', 'dist_target'],
+            ['agent_rot', 'vec_dx', 'vec_dz', 'dist_target']
         ];
 
         // --- Simplicial Complex Closure Logic ---
@@ -65,13 +64,11 @@ export class EnhancedQualiaSheaf {
             allEdgesSet.add(edge.slice().sort().join(','));
         });
 
-        const finalTrianglesUpdated = [...explicitTriangles];
-        const finalTetrahedraUpdated = [...explicitTetrahedra];
+        let finalTrianglesUpdated = [...explicitTriangles];
+        let finalTetrahedraUpdated = [...explicitTetrahedra];
 
-        // Ensure higher-order simplices imply lower-order ones
-        // From Tetrahedra, generate implied Triangles and Edges
         finalTetrahedraUpdated.forEach(tet => {
-            if (tet.length !== 4) { logger.warn(`Invalid tetrahedron: ${tet}`); return; }
+            if (tet.length !== 4) { logger.warn(`Sheaf: Invalid tetrahedron: ${tet}`); return; }
             for (let i = 0; i < 4; i++) {
                 const newTri = tet.filter((_, idx) => idx !== i).sort(); 
                 const triStr = newTri.join(',');
@@ -81,9 +78,8 @@ export class EnhancedQualiaSheaf {
             }
         });
 
-        // From Triangles, generate implied Edges
         finalTrianglesUpdated.forEach(tri => {
-            if (tri.length !== 3) { logger.warn(`Invalid triangle: ${tri}`); return; }
+            if (tri.length !== 3) { logger.warn(`Sheaf: Invalid triangle: ${tri}`); return; }
             for (let i = 0; i < 3; i++) {
                 const newEdge = [tri[i], tri[(i + 1) % 3]].sort();
                 const edgeStr = newEdge.join(',');
@@ -127,7 +123,7 @@ export class EnhancedQualiaSheaf {
         this.ready = false;
 
         this.phi = 0.2;
-        this.h1Dimension = 0;  // Phase 1B: Betti-1
+        this.h1Dimension = 0;
         this.gestaltUnity = 0.6;
         this.stability = 0.6;
         this.diffusionEnergy = 0;
@@ -145,10 +141,10 @@ export class EnhancedQualiaSheaf {
         logger.info('EnhancedQualiaSheaf.initialize() called.');
         try {
             // Initial computation of adjacency and H1
-            await this.computeCorrelationMatrix(); // This also builds adjacencyMatrix
-            this.projectionMatrices =             this.projectionMatrices = await this.computeProjectionMatrices(); // ENSURE THIS IS AWAITED AND ASSIGNED AND ASSIGNED
-            await this.computeH1Dimension();  // Phase 1B
-            await this._updateDerivedMetrics(); // Compute other metrics
+            await this.computeCorrelationMatrix(); // This also builds adjacencyMatrix based on current graph.edges
+            this.projectionMatrices = await this.computeProjectionMatrices();
+            await this.computeH1Dimension();
+            await this._updateDerivedMetrics();
             this.ready = true;
             logger.info('Enhanced Qualia Sheaf ready with higher-order simplices.');
         } catch (e) {
@@ -159,24 +155,23 @@ export class EnhancedQualiaSheaf {
     }
 
     // --- Phase 1B: Topology Adaptation & Homology ---
+    // This is the original `adaptSheafTopology` which only updates the correlation matrix
+    // based on stalk history. It does not dynamically change graph edges/simplices.
     adaptSheafTopology() {
         if (this.stalkHistory.length < this.stalkHistorySize) return;
 
         const numVertices = this.graph.vertices.length;
         if (numVertices === 0) return;
 
-        // Using average stalk magnitude as a proxy for activity
         const means = new Float32Array(numVertices).fill(0);
         for (let i = 0; i < numVertices; i++) {
             for (let t = 0; t < this.stalkHistorySize; t++) {
-                // stalkHistory now stores norms, so directly use
                 const val = this.stalkHistory[t][i];
                 means[i] += Number.isFinite(val) ? val : 0;
             }
             means[i] /= this.stalkHistorySize;
         }
 
-        // Compute correlation between vertex activities
         for (let i = 0; i < numVertices; i++) {
             for (let j = i; j < numVertices; j++) {
                 let numerator = 0;
@@ -196,13 +191,12 @@ export class EnhancedQualiaSheaf {
             }
         }
         if (!isFiniteMatrix(this.correlationMatrix)) {
-            logger.warn('Non-finite correlation matrix detected; resetting to zero.');
+            logger.warn('Sheaf: Non-finite correlation matrix detected; resetting to zero.');
             this.correlationMatrix = zeroMatrix(numVertices, numVertices);
         }
     }
 
     async buildBoundaryMatrices() {
-        // Phase 1B: Sparse boundary matrices over GF(2)
         if (!this.graph.vertices.length) {
             return {
                 partial1: { flatData: new Float32Array(0), rows: 0, cols: 0 },
@@ -212,7 +206,6 @@ export class EnhancedQualiaSheaf {
         }
 
         const vMap = new Map(this.graph.vertices.map((v, i) => [v, i]));
-        // Map strings to indices directly for efficient lookup
         const eMapIndices = new Map(this.graph.edges.map((e, i) => [e.slice().sort().join(','), i]));
         const tMapIndices = new Map(this.simplicialComplex.triangles.map((t, i) => [t.slice().sort().join(','), i]));
 
@@ -221,28 +214,22 @@ export class EnhancedQualiaSheaf {
         const nT = this.simplicialComplex.triangles.length;
         const nTet = this.simplicialComplex.tetrahedra.length;
 
-        // ∂₁: C₁ → C₀ (Edges to Vertices) - (Incidence matrix)
-        // In GF(2), it simply connects vertices to edges.
-        // For homology, we typically use ∂_k: C_k -> C_{k-1}. So ∂1: C1 -> C0
-        // and ∂2: C2 -> C1 (triangles to edges), ∂3: C3 -> C2 (tetrahedra to triangles)
-        const boundary1 = zeroMatrix(nE, nV); // Edges by Vertices
+        const boundary1 = zeroMatrix(nE, nV);
         this.graph.edges.forEach((edge, eIdx) => {
-            if (eIdx < nE) { // Bounds check
+            if (eIdx < nE) {
                 edge.forEach(v => {
                     const vIdx = vMap.get(v);
                     if (vIdx !== undefined && vIdx < nV) {
-                        boundary1[eIdx][vIdx] = 1; // GF(2)
+                        boundary1[eIdx][vIdx] = 1;
                     }
                 });
-            } else { logger.warn(`Edge index out of bounds for ∂1: ${eIdx}`); }
+            } else { logger.warn(`Sheaf: Edge index out of bounds for ∂1: ${eIdx}`); }
         });
 
 
-        // ∂₂: C₂ → C₁ (Triangles to Edges) - (Faces of triangles)
-        // In GF(2), it's the cycle matrix
-        const boundary2 = zeroMatrix(nT, nE); // Triangles by Edges
+        const boundary2 = zeroMatrix(nT, nE);
         this.simplicialComplex.triangles.forEach((tri, tIdx) => {
-            if (tIdx < nT) { // Bounds check
+            if (tIdx < nT) {
                 const sortedTri = tri.slice().sort();
                 const edgesOfTri = [
                     [sortedTri[0], sortedTri[1]].sort().join(','),
@@ -250,46 +237,43 @@ export class EnhancedQualiaSheaf {
                     [sortedTri[2], sortedTri[0]].sort().join(',')
                 ];
                 edgesOfTri.forEach(edgeStr => {
-                    const eIdx = eMapIndices.get(edgeStr); // Direct index lookup
+                    const eIdx = eMapIndices.get(edgeStr);
                     if (eIdx !== undefined && eIdx < nE) {
-                        boundary2[tIdx][eIdx] = 1; // GF(2)
-                    } else { logger.warn(`Edge not found or index out of bounds for ∂2: ${edgeStr}`); }
+                        boundary2[tIdx][eIdx] = 1;
+                    } else { logger.warn(`Sheaf: Edge not found or index out of bounds for ∂2: ${edgeStr}`); }
                 });
-            } else { logger.warn(`Triangle index out of bounds for ∂2: ${tIdx}`); }
+            } else { logger.warn(`Sheaf: Triangle index out of bounds for ∂2: ${tIdx}`); }
         });
 
-        // ∂₃: C₃ → C₂ (Tetrahedra to Triangles) - (Faces of tetrahedra)
-        const boundary3 = zeroMatrix(nTet, nT); // Tetrahedra by Triangles
+        const boundary3 = zeroMatrix(nTet, nT);
         this.simplicialComplex.tetrahedra.forEach((tet, tetIdx) => {
-            if (tetIdx < nTet) { // Bounds check
+            if (tetIdx < nTet) {
                 const sortedTet = tet.slice().sort();
                 for (let i = 0; i < 4; i++) {
-                    const face = sortedTet.filter((_, idx) => idx !== i).sort(); // A face is a triangle
+                    const face = sortedTet.filter((_, idx) => idx !== i).sort();
                     const faceStr = face.join(',');
-                    const tIdx = tMapIndices.get(faceStr); // Direct index lookup
+                    const tIdx = tMapIndices.get(faceStr);
                     if (tIdx !== undefined && tIdx < nT) {
-                        boundary3[tetIdx][tIdx] = 1; // GF(2)
-                    } else { logger.warn(`Triangle not found or index out of bounds for ∂3: ${faceStr}`); }
-                    // Log the face generation for debugging
-                    // logger.info(`Tet ${tet.join(',')} -> Face ${faceStr} -> tIdx ${tIdx}`);
+                        boundary3[tetIdx][tIdx] = 1;
+                    } else { logger.warn(`Sheaf: Triangle not found or index out of bounds for ∂3: ${faceStr}`); }
                 }
-            } else { logger.warn(`Tetrahedron index out of bounds for ∂3: ${tetIdx}`); }
+            } else { logger.warn(`Sheaf: Tetrahedron index out of bounds for ∂3: ${tetIdx}`); }
         });
 
-
-        // Flatten for worker, ensuring finite matrices
         const safeFlatten = (matrix, rows, cols, name) => {
             if (!isFiniteMatrix(matrix)) {
-                logger.error(`Non-finite matrix for ${name} boundary detected. Returning empty flattened matrix.`);
+                logger.error(`Sheaf: Non-finite matrix for ${name} boundary detected. Returning empty flattened matrix.`);
                 return { flatData: new Float32Array(0), rows: 0, cols: 0 };
             }
-            return flattenMatrix(matrix);
+            const flatData = flattenMatrix(matrix).flatData;
+            if (!isFiniteVector(flatData)) {
+                logger.error(`Sheaf: Non-finite flatData after flattening for ${name} boundary. Returning empty.`);
+                return { flatData: new Float32Array(0), rows: 0, cols: 0 };
+            }
+            return { flatData, rows, cols };
         };
 
         return {
-            // Note: Homology typically uses ∂_k: C_k -> C_{k-1}. We need rank(∂_k)
-            // For H1 = Ker(∂2) / Im(∂3)
-            // so we need rank(∂2) and rank(∂3). The matrix representing ∂1 (edges to vertices) isn't directly used for H1 Betti-number calculation here, but included for completeness of the complex.
             partial1: safeFlatten(boundary1, nE, nV, "boundary1"),
             partial2: safeFlatten(boundary2, nT, nE, "boundary2"),
             partial3: safeFlatten(boundary3, nTet, nT, "boundary3")
@@ -297,20 +281,31 @@ export class EnhancedQualiaSheaf {
     }
 
     async computeCorrelationMatrix() {
-        // Phase 1B: Dynamic weights
-        // OWM.actorLoss is typically a positive value, so normalize it.
-        // Lower actorLoss means better performance (less error), so we want to boost weights.
+        // This is the simplified version, NOT including Phase 2.1 dynamic adaptation.
+        // It only updates the correlation matrix and then rebuilds the adjacency matrix
+        // based on the *current* graph structure.
+        this.adaptSheafTopology(); // Update correlation matrix from history
+
+        const numVertices = this.graph.vertices.length;
+        if (numVertices === 0) {
+            this.adjacencyMatrix = zeroMatrix(0, 0);
+            return;
+        }
+
+        // --- Phase 1.1 NaN Guards for Dynamic Weighting ---
         const performanceFactor = Number.isFinite(this.owm?.actorLoss) 
-            ? (1 - clamp(this.owm.actorLoss / 0.5, 0, 1)) // Scale actorLoss (e.g., 0.5 is max expected)
-            : 0; // If actorLoss is NaN, assume worst performance (0 boost)
-        const performanceScalar = clamp(1 + performanceFactor, 0.5, 2.0); // Boost range 0.5 to 2.0
+            ? (1 - clamp(this.owm.actorLoss / 0.5, 0, 1)) 
+            : 0;
+        if (!Number.isFinite(performanceFactor)) { logger.warn('Sheaf: Non-finite performanceFactor. Setting to 0.'); performanceFactor = 0; }
 
-        // Heuristic: boost connectivity if the AI is 'confused' (high h1Dimension)
-        // This encourages exploring new conceptual links to resolve topological 'holes'
-        const h1Boost = 1 + clamp(this.h1Dimension / (this.graph.vertices.length / 2), 0, 1) * 0.5; // Max 50% boost
+        const performanceScalar = clamp(1 + performanceFactor, 0.5, 2.0);
+        if (!Number.isFinite(performanceScalar)) { logger.warn('Sheaf: Non-finite performanceScalar. Setting to 1.'); performanceScalar = 1; }
 
-        this.adaptSheafTopology(); // Update based on stalk history
-        this.adjacencyMatrix = zeroMatrix(this.graph.vertices.length, this.graph.vertices.length);
+        const h1Boost = 1 + clamp(this.h1Dimension / Math.max(1, numVertices / 2), 0, 1) * 0.5;
+        if (!Number.isFinite(h1Boost)) { logger.warn('Sheaf: Non-finite h1Boost. Setting to 1.'); h1Boost = 1; }
+        // --- End Phase 1.1 NaN Guards for Dynamic Weighting ---
+
+        this.adjacencyMatrix = zeroMatrix(numVertices, numVertices);
 
         this.graph.edges.forEach(([u, v]) => {
             const i = this.graph.vertices.indexOf(u);
@@ -318,30 +313,28 @@ export class EnhancedQualiaSheaf {
             if (i >= 0 && j >= 0) {
                 const correlation = this.correlationMatrix[i][j];
                 
-                // Combine correlation with dynamic factors
-                // Base weight starts from 0.1 to always allow some connection
+                // --- Phase 1.1 NaN Guards for dynamicWeight ---
                 const dynamicWeight = clamp((0.1 + 0.9 * ((1 + correlation) / 2)) * performanceScalar * h1Boost, 0.01, 1.0);
-                
-                this.adjacencyMatrix[i][j] = this.adjacencyMatrix[j][i] = dynamicWeight;
+                if (!Number.isFinite(dynamicWeight)) { 
+                    logger.warn(`Sheaf: Non-finite dynamicWeight for edge ${u}-${v} in computeCorrelationMatrix. Setting to 0.1.`);
+                    this.adjacencyMatrix[i][j] = this.adjacencyMatrix[j][i] = 0.1;
+                } else {
+                    this.adjacencyMatrix[i][j] = this.adjacencyMatrix[j][i] = dynamicWeight;
+                }
             }
         });
 
         if (!isFiniteMatrix(this.adjacencyMatrix)) {
-            logger.error('Non-finite adjacency matrix after dynamic weighting; resetting to zero.');
-            this.adjacencyMatrix = zeroMatrix(this.graph.vertices.length, this.graph.vertices.length);
+            logger.error('Sheaf: Non-finite adjacency matrix after dynamic weighting. Resetting to zero.');
+            this.adjacencyMatrix = zeroMatrix(numVertices, numVertices);
         }
-
-        // logger.info(`Correlation matrix computed. PerfScalar=${performanceScalar.toFixed(3)}, H1Boost=${h1Boost.toFixed(3)}, Adj[0][1]=${this.adjacencyMatrix[0]?.[1]?.toFixed(3) || 'N/A'}`);
     }
-
-    // This method is now effectively replaced by computeCorrelationMatrix for adjacency logic
-    buildAdjacencyMatrix() { /* Legacy, now handled by computeCorrelationMatrix */ }
 
     buildLaplacian() {
         const n = this.graph.vertices.length;
-        const adj = this.adjacencyMatrix; // Use the dynamically computed adjacency
-        if (!adj || !isFiniteMatrix(adj)) {
-            logger.error('buildLaplacian: Adjacency matrix is invalid. Cannot build Laplacian.');
+        const adj = this.adjacencyMatrix;
+        if (!adj || !isFiniteMatrix(adj) || adj.length !== n || (n > 0 && adj[0].length !== n)) {
+            logger.error('Sheaf.buildLaplacian: Adjacency matrix is invalid or dimensions mismatch. Cannot build Laplacian.');
             return zeroMatrix(n, n);
         }
         const L = zeroMatrix(n, n);
@@ -351,7 +344,7 @@ export class EnhancedQualiaSheaf {
             for (let j = 0; j < n; j++) {
                 const weight = adj[i]?.[j] || 0;
                 if (!Number.isFinite(weight)) { 
-                    logger.warn(`Non-finite weight in adjacency matrix at [${i}][${j}]. Setting to 0.`);
+                    logger.warn(`Sheaf.buildLaplacian: Non-finite weight in adjacency matrix at [${i}][${j}]. Setting to 0.`);
                     adj[i][j] = 0; 
                 }
                 if (adj[i][j] > 0) {
@@ -359,10 +352,10 @@ export class EnhancedQualiaSheaf {
                     deg += adj[i][j];
                 }
             }
-            L[i][i] = deg + this.eps; // Add epsilon for numerical stability
+            L[i][i] = deg + this.eps;
         }
         if (!isFiniteMatrix(L)) {
-            logger.error('Non-finite Laplacian matrix detected; resetting to zero.');
+            logger.error('Sheaf: Non-finite Laplacian matrix detected; resetting to zero.');
             return zeroMatrix(n, n);
         }
         return L;
@@ -370,8 +363,7 @@ export class EnhancedQualiaSheaf {
 
     async computeProjectionMatrices() {
         const projections = new Map();
-        // Identity matrix for now, can be replaced by learned projections later
-        const identityMatrix = identity(this.qDim); // Use the utility's identity which creates Float32Array rows
+        const identityMatrix = identity(this.qDim);
 
         for (const [u, v] of this.graph.edges) {
             projections.set(`${u}-${v}`, identityMatrix);
@@ -382,25 +374,24 @@ export class EnhancedQualiaSheaf {
 
     async _updateGraphStructureAndMetrics() {
         try {
-            await this.computeCorrelationMatrix(); // This will call adaptSheafTopology internally
+            await this.computeCorrelationMatrix(); // This updates adjacencyMatrix
             this.laplacian = this.buildLaplacian();
 
             const flatLaplacian = flattenMatrix(this.laplacian);
             if (!isFiniteVector(flatLaplacian.flatData)) {
-                logger.error("Non-finite Laplacian matrix detected before spectral norm calculation. Defaulting maxEigApprox to 1.");
+                logger.error("Sheaf: Non-finite Laplacian matrix detected before spectral norm calculation. Defaulting maxEigApprox to 1.");
                 this.maxEigApprox = 1;
             } else {
                 this.maxEigApprox = await runWorkerTask('matrixSpectralNormApprox', { matrix: flatLaplacian }, 10000);
                 if (!Number.isFinite(this.maxEigApprox) || this.maxEigApprox <= 0) {
-                    logger.warn(`maxEigApprox was invalid (${this.maxEigApprox}). Resetting to 1.`);
+                    logger.warn(`Sheaf: maxEigApprox was invalid (${this.maxEigApprox}). Resetting to 1.`);
                     this.maxEigApprox = 1;
                 }
             }
             
-            this.projectionMatrices =             this.projectionMatrices = await this.computeProjectionMatrices(); // ENSURE THIS IS AWAITED AND ASSIGNED AND ASSIGNED
-            await this.computeH1Dimension(); // Update H1 after graph structure changes
+            this.projectionMatrices = await this.computeProjectionMatrices();
         } catch (e) {
-            logger.error("Failed to update graph structure and metrics", e);
+            logger.error("Sheaf: Failed to update graph structure and metrics", e);
             throw e;
         }
     }
@@ -411,7 +402,7 @@ export class EnhancedQualiaSheaf {
             return;
         }
         if (!isFiniteVector(state) || state.length !== this.stateDim) {
-            logger.warn('diffuseQualia: Invalid input state received. Skipping diffusion.', state);
+            logger.warn('Sheaf.diffuseQualia: Invalid input state received. Skipping diffusion.', {state});
             return;
         }
 
@@ -419,7 +410,7 @@ export class EnhancedQualiaSheaf {
 
         const qInput = new Float32Array(state.slice(0, this.graph.vertices.length).map(v => clamp(v, 0, 1)));
         if (!isFiniteVector(qInput) || qInput.length !== this.graph.vertices.length) {
-            logger.warn('diffuseQualia: Invalid qInput generated. Skipping diffusion.', qInput);
+            logger.warn('Sheaf.diffuseQualia: Invalid qInput generated. Skipping diffusion.', {qInput});
             return;
         }
 
@@ -431,20 +422,19 @@ export class EnhancedQualiaSheaf {
         for (const vertexName of this.graph.vertices) {
             let stalkValue = this.stalks.get(vertexName);
             if (!stalkValue || !isFiniteVector(stalkValue) || stalkValue.length !== this.qDim) {
-                logger.warn(`Found invalid or missing stalk for vertex ${vertexName}. Resetting to zeros.`);
+                logger.warn(`Sheaf.diffuseQualia: Found invalid or missing stalk for vertex ${vertexName}. Resetting to zeros.`);
                 stalkValue = vecZeros(this.qDim);
                 this.stalks.set(vertexName, stalkValue);
             }
-            s.set(stalkValue.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0), currentOffset); // Ensure elements are finite and clamped
+            s.set(stalkValue.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0), currentOffset);
             currentOffset += this.qDim;
         }
 
         if (!isFiniteVector(s)) {
-            logger.error('diffuseQualia: Initial concatenated stalk vector "s" contains non-finite values. Resetting to zeros for current diffusion step.', s);
+            logger.error('Sheaf.diffuseQualia: Initial concatenated stalk vector "s" contains non-finite values. Resetting to zeros for current diffusion step.', {s});
             s.fill(0);
         }
 
-        // --- Build Lfull: the block Laplacian matrix ---
         const Lfull = zeroMatrix(N, N);
         const idx = new Map(this.graph.vertices.map((v, i) => [v, i]));
 
@@ -452,14 +442,17 @@ export class EnhancedQualiaSheaf {
             const i = idx.get(u), j = idx.get(v);
             if (i === undefined || j === undefined) continue;
 
-            const weight = this.adjacencyMatrix[i][j];
-            if (!Number.isFinite(weight) || weight <= 0) continue;
+            const weight = this.adjacencyMatrix[i]?.[j];
+            if (!Number.isFinite(weight) || weight <= 0) {
+                 logger.warn(`Sheaf.diffuseQualia: Non-finite or non-positive weight for edge ${u}-${v}. Skipping block.`);
+                continue;
+            }
 
             const P_uv = this.projectionMatrices.get(`${u}-${v}`);
             const P_vu = this.projectionMatrices.get(`${v}-${u}`);
 
-            if (!isFiniteMatrix(P_uv) || !isFiniteMatrix(P_vu)) { // This check should now pass if P_uv is correctly populated
-                logger.warn(`Non-finite or missing projection matrix for edge ${u}-${v}. Skipping block. P_uv isFiniteMatrix: ${isFiniteMatrix(P_uv)}.`);
+            if (!isFiniteMatrix(P_uv) || !isFiniteMatrix(P_vu)) {
+                logger.warn(`Sheaf.diffuseQualia: Non-finite or missing projection matrix for edge ${u}-${v}. Skipping block. P_uv isFiniteMatrix: ${isFiniteMatrix(P_uv)}.`);
                 continue;
             }
 
@@ -467,7 +460,7 @@ export class EnhancedQualiaSheaf {
                 for (let qj = 0; qj < this.qDim; qj++) {
                     const val_uv = -weight * (P_uv[qi]?.[qj] || 0);
                     if (Number.isFinite(val_uv)) {
-                        Lfull[i * this.qDim + qi][j * this.qDim + qj] = clamp(val_uv, -100, 100); // Clamp Lfull components
+                        Lfull[i * this.qDim + qi][j * this.qDim + qj] = clamp(val_uv, -100, 100);
                     } else {
                         Lfull[i * this.qDim + qi][j * this.qDim + qj] = 0;
                     }
@@ -477,7 +470,7 @@ export class EnhancedQualiaSheaf {
                 for (let qj = 0; qj < this.qDim; qj++) {
                      const val_vu = -weight * (P_vu[qi]?.[qj] || 0);
                      if (Number.isFinite(val_vu)) {
-                        Lfull[j * this.qDim + qi][i * this.qDim + qj] = clamp(val_vu, -100, 100); // Clamp Lfull components
+                        Lfull[j * this.qDim + qi][i * this.qDim + qj] = clamp(val_vu, -100, 100);
                      } else {
                          Lfull[j * this.qDim + qi][i * this.qDim + qj] = 0;
                      }
@@ -489,35 +482,47 @@ export class EnhancedQualiaSheaf {
             let degree = 0;
             for (let j = 0; j < n; j++) {
                 if (i !== j) {
-                    degree += (this.adjacencyMatrix[i]?.[j] || 0);
+                    const adjVal = this.adjacencyMatrix[i]?.[j];
+                    if (Number.isFinite(adjVal)) {
+                        degree += adjVal;
+                    } else {
+                        logger.warn(`Sheaf.diffuseQualia: Non-finite adjacency matrix value for degree calculation at [${i}][${j}]. Skipping.`);
+                    }
                 }
             }
+            if (!Number.isFinite(degree)) { logger.warn(`Sheaf.diffuseQualia: Non-finite degree for vertex ${this.graph.vertices[i]}. Setting to 0.`); degree = 0; }
+
             for (let qi = 0; qi < this.qDim; qi++) {
-                Lfull[i * this.qDim + qi][i * this.qDim + qi] = clamp((Number.isFinite(degree) ? degree : 0) + this.eps, -100, 100); // Clamp Lfull components
+                Lfull[i * this.qDim + qi][i * this.qDim + qi] = clamp(degree + this.eps, -100, 100);
             }
         }
-        // --- End Build Lfull ---
+        if (!isFiniteMatrix(Lfull)) {
+            logger.error('Sheaf.diffuseQualia: Lfull matrix contains non-finite values after construction. Resetting to identity for stability.');
+            for(let i=0; i<N; ++i) for(let j=0; j<N; ++j) Lfull[i][j] = (i===j ? 1 : 0);
+        }
 
         const f_s = new Float32Array(N).fill(0);
         for (let i = 0; i < n; i++) {
-            const inputVal = qInput[i % qInput.length];
+            let inputVal = qInput[i % qInput.length];
+            if (!Number.isFinite(inputVal)) { logger.warn(`Sheaf.diffuseQualia: Non-finite qInput value at index ${i}. Setting to 0.`); inputVal = 0; }
             for (let qi = 0; qi < this.qDim; qi++) {
                 f_s[i * this.qDim + qi] = this.alpha * inputVal * 0.7;
             }
         }
+        if (!isFiniteVector(f_s)) { logger.error('Sheaf.diffuseQualia: f_s vector is non-finite. Resetting to zeros.'); f_s.fill(0); }
 
         const eta = this.gamma / Math.max(1, this.maxEigApprox);
+        if (!Number.isFinite(eta)) { logger.warn('Sheaf.diffuseQualia: Non-finite eta. Setting to 0.01.'); eta = 0.01; }
         
-        // Ensure A is constructed robustly and its elements are clamped
         const A = zeroMatrix(N, N).map((row, i) => new Float32Array(row.map((v, j) => {
-            const val = (i === j ? 1 : 0) + eta * (Lfull[i]?.[j] || 0); // Identity(N) + eta * Lfull
-            return Number.isFinite(val) ? clamp(val, -100, 100) : 0; // Sanitize and clamp A elements
+            const val = (i === j ? 1 : 0) + eta * (Lfull[i]?.[j] || 0);
+            return Number.isFinite(val) ? clamp(val, -100, 100) : 0;
         })));
         
-        const rhs = vecAdd(s, vecScale(f_s, eta)).map(v => Number.isFinite(v) ? clamp(v, -100, 100) : 0); // Explicitly sanitize rhs
+        const rhs = vecAdd(s, vecScale(f_s, eta)).map(v => Number.isFinite(v) ? clamp(v, -100, 100) : 0);
 
         if (!isFiniteMatrix(A) || !isFiniteVector(rhs)) {
-            logger.error('diffuseQualia: Matrix A or RHS vector contains non-finite values before CG solve. Skipping diffusion or using fallback.');
+            logger.error('Sheaf.diffuseQualia: Matrix A or RHS vector contains non-finite values before CG solve. Skipping diffusion or using fallback.');
             const sNext = new Float32Array(N).fill(0); 
             this._updateStalksAndWindow(sNext, n);
             await this._updateDerivedMetrics();
@@ -527,21 +532,21 @@ export class EnhancedQualiaSheaf {
         let sSolved;
         try {
             sSolved = await runWorkerTask('solveLinearSystemCG', { A: flattenMatrix(A), b: rhs, opts: { tol: 1e-6, maxIter: 15 } }, 5000);
-            if (!isFiniteVector(sSolved)) { // Check immediately after worker call
-                 logger.error('Worker returned non-finite sSolved from solveLinearSystemCG. Falling back to zeros.');
+            if (!isFiniteVector(sSolved)) {
+                 logger.error('Sheaf.diffuseQualia: Worker returned non-finite sSolved from solveLinearSystemCG. Falling back to zeros.');
                  sSolved = vecZeros(N);
             }
         } catch (e) {
-            logger.error('Error solving linear system in worker (CG). Falling back to zero vector:', e);
+            logger.error('Sheaf.diffuseQualia: Error solving linear system in worker (CG). Falling back to zero vector:', e);
             sSolved = vecZeros(N);
         }
 
         if (!isFiniteVector(sSolved)) {
-            logger.error('CRITICAL: Solver output or fallback contained non-finite values. Resetting sSolved to zero vector.', { sSolved });
+            logger.error('Sheaf.diffuseQualia: CRITICAL: Solver output or fallback contained non-finite values. Resetting sSolved to zero vector.', { sSolved });
             sSolved = vecZeros(N); 
         }
         
-        const sNext = new Float32Array(sSolved.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0)); // Ensure final stalk values are tightly clamped
+        const sNext = new Float32Array(sSolved.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0));
 
         this._updateStalksAndWindow(sNext, n);
         await this._updateDerivedMetrics();
@@ -552,6 +557,10 @@ export class EnhancedQualiaSheaf {
         for (let i = 0; i < n; i++) {
             const rawStalkSlice = sNextVector.slice(i * this.qDim, (i + 1) * this.qDim);
             const sanitizedStalk = new Float32Array(rawStalkSlice.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0));
+            if (!isFiniteVector(sanitizedStalk)) {
+                logger.error(`Sheaf._updateStalksAndWindow: Sanitized stalk for vertex ${this.graph.vertices[i]} is non-finite. Resetting to zeros.`, { sanitizedStalk });
+                sanitizedStalk.fill(0);
+            }
             this.stalks.set(this.graph.vertices[i], sanitizedStalk);
             currentStalkNorms[i] = norm2(sanitizedStalk);
         }
@@ -561,18 +570,21 @@ export class EnhancedQualiaSheaf {
         }
 
         const sanitizedNextVector = new Float32Array(sNextVector.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0));
+        if (!isFiniteVector(sanitizedNextVector)) {
+            logger.error('Sheaf._updateStalksAndWindow: sanitizedNextVector for windowedStates is non-finite. Resetting to zeros.');
+            sanitizedNextVector.fill(0);
+        }
         this.windowedStates.push(sanitizedNextVector);
         if (this.windowedStates.length > this.windowSize) this.windowedStates.shift();
     }
 
     async _updateDerivedMetrics() {
         try {
-            await this.computeH1Dimension();
             await this.computeGluingInconsistency();
             this.computeGestaltUnity();
             await this.computeIntegratedInformation();
         } catch (e) {
-            logger.error("Error during derived metrics update:", e);
+            logger.error("Sheaf: Error during derived metrics update:", e);
             this.phi = 0.01;
             this.h1Dimension = 0.5;
             this.gestaltUnity = 0.05;
@@ -581,50 +593,37 @@ export class EnhancedQualiaSheaf {
         }
     }
 
-    // --- Phase 1B: Betti-1 Computation ---
     async computeH1Dimension() {
-        if (!this.adjacencyMatrix) {
-            await this.computeCorrelationMatrix();
-        }
+        // Removed debug logs as they served their purpose.
         const boundaries = await this.buildBoundaryMatrices();
         
-        let rankPartial2 = 0; // rank(∂2: C2 -> C1)
-        let rankPartial3 = 0; // rank(∂3: C3 -> C2)
+        let rankPartial2 = 0;
+        let rankPartial3 = 0;
 
         try {
-            // Compute rank of ∂₂ (triangles to edges)
             const p2Result = await runWorkerTask('smithNormalForm', boundaries.partial2, 5000);
-            rankPartial2 = p2Result.rank || 0;
-            if (!Number.isFinite(rankPartial2)) { rankPartial2 = 0; logger.warn('Non-finite rank for ∂2'); }
+            rankPartial2 = p2Result?.rank || 0;
+            if (!Number.isFinite(rankPartial2)) { logger.warn('Sheaf: Non-finite rank for ∂2. Setting to 0.'); rankPartial2 = 0; }
 
-            // Compute rank of ∂₃ (tetrahedra to triangles)
             const p3Result = await runWorkerTask('smithNormalForm', boundaries.partial3, 5000);
-            rankPartial3 = p3Result.rank || 0;
-            if (!Number.isFinite(rankPartial3)) { rankPartial3 = 0; logger.warn('Non-finite rank for ∂3'); }
+            rankPartial3 = p3Result?.rank || 0;
+            if (!Number.isFinite(rankPartial3)) { logger.warn('Sheaf: Non-finite rank for ∂3. Setting to 0.'); rankPartial3 = 0; }
 
         } catch (e) {
-            logger.error('Homology computation (smithNormalForm) failed:', e);
-            // Fallback to simpler heuristic for Betti-1 if worker fails
-            this.h1Dimension = this.graph.edges.length - this.graph.vertices.length + this.simplicialComplex.triangles.length;
-            this.h1Dimension = clamp(this.h1Dimension, 0, this.graph.vertices.length);
+            logger.error('Sheaf: Homology computation (smithNormalForm) failed:', e);
+            this.h1Dimension = clamp(this.graph.edges.length - this.graph.vertices.length + this.simplicialComplex.triangles.length, 0, this.graph.vertices.length);
             this.stability = clamp(Math.exp(-this.h1Dimension * 0.2), 0.01, 1);
             return;
         }
         
         const numEdges = this.graph.edges.length;
-        const numTriangles = this.simplicialComplex.triangles.length;
 
-        // Betti-1 = dim Ker(∂₂) - dim Im(∂₃)
-        // dim Ker(∂₂) = num_edges - rank(∂₂)
-        // dim Im(∂₃) = rank(∂₃)
         this.h1Dimension = (numEdges - rankPartial2) - rankPartial3;
-        this.h1Dimension = clamp(this.h1Dimension, 0, numEdges); // Clamp within reasonable bounds
-        if (!Number.isFinite(this.h1Dimension)) this.h1Dimension = 0;
+        this.h1Dimension = clamp(this.h1Dimension, 0, numEdges);
+        if (!Number.isFinite(this.h1Dimension)) { logger.error('Sheaf: Final h1Dimension is non-finite. Setting to 0.'); this.h1Dimension = 0; }
 
         this.stability = clamp(Math.exp(-this.h1Dimension * 0.2), 0.01, 1);
-        if (!Number.isFinite(this.stability)) this.stability = 0.5;
-
-        // logger.info(`H1 dim computed: ${this.h1Dimension.toFixed(2)} (numEdges=${numEdges}, rank(∂2)=${rankPartial2}, rank(∂3)=${rankPartial3})`);
+        if (!Number.isFinite(this.stability)) { logger.error('Sheaf: Final stability is non-finite. Setting to 0.5.'); this.stability = 0.5; }
     }
 
     async computeGluingInconsistency() {
@@ -634,9 +633,8 @@ export class EnhancedQualiaSheaf {
             const stalk_v = this.stalks.get(v);
             const P_uv = this.projectionMatrices.get(`${u}-${v}`);
 
-            // Explicitly check for non-finite values at each point of access
             if (!P_uv || !isFiniteMatrix(P_uv) || !isFiniteVector(stalk_u) || !isFiniteVector(stalk_v)) {
-                logger.warn(`Skipping inconsistency calculation for edge ${u}-${v} due to non-finite inputs (stalk_u: ${isFiniteVector(stalk_u)}, stalk_v: ${isFiniteVector(stalk_v)}, P_uv: ${isFiniteMatrix(P_uv) ? 'true' : 'false' /* more informative */}).`);
+                logger.warn(`Sheaf.computeGluingInconsistency: Skipping inconsistency calculation for edge ${u}-${v} due to non-finite inputs.`);
                 continue;
             }
 
@@ -644,20 +642,25 @@ export class EnhancedQualiaSheaf {
             try {
                 projected_u = await runWorkerTask('matVecMul', { matrix: flattenMatrix(P_uv), vector: stalk_u }, 5000);
                 if (!isFiniteVector(projected_u)) {
-                    logger.warn(`Worker returned non-finite projected_u for edge ${u}-${v}. Setting to zeros.`);
+                    logger.warn(`Sheaf.computeGluingInconsistency: Worker returned non-finite projected_u for edge ${u}-${v}. Setting to zeros.`);
                     projected_u = vecZeros(this.qDim);
                 }
             } catch (e) {
-                logger.error(`Error projecting stalk_u for edge ${u}-${v} in worker:`, e);
+                logger.error(`Sheaf.computeGluingInconsistency: Error projecting stalk_u for edge ${u}-${v} in worker. Setting to zeros:`, e);
                 projected_u = vecZeros(this.qDim);
             }
             
-            const safeProjected_u = isFiniteVector(projected_u) ? projected_u.map(v => clamp(v, -1, 1)) : vecZeros(this.qDim); // Clamp
+            const safeProjected_u = isFiniteVector(projected_u) ? projected_u.map(v => clamp(v, -1, 1)) : vecZeros(this.qDim);
             
-            sum += norm2(vecSub(safeProjected_u, stalk_v));
+            const diffNorm = norm2(vecSub(safeProjected_u, stalk_v));
+            if (Number.isFinite(diffNorm)) {
+                 sum += diffNorm;
+            } else {
+                 logger.warn(`Sheaf.computeGluingInconsistency: Non-finite diffNorm for edge ${u}-${v}. Skipping addition to sum.`, { projected: safeProjected_u, stalk_v });
+            }
         }
         this.inconsistency = this.graph.edges.length > 0 ? clamp(sum / this.graph.edges.length, 0, 1) : 0;
-        if (!Number.isFinite(this.inconsistency)) this.inconsistency = 1.0;
+        if (!Number.isFinite(this.inconsistency)) { logger.error('Sheaf: Final inconsistency is non-finite. Setting to 1.0.'); this.inconsistency = 1.0; }
     }
 
     computeGestaltUnity() {
@@ -669,17 +672,20 @@ export class EnhancedQualiaSheaf {
                 const diffNorm = norm2(vecSub(stalk_u, stalk_v));
                 if (Number.isFinite(diffNorm)) {
                     sum += Math.exp(-diffNorm * this.beta);
+                } else {
+                    logger.warn(`Sheaf.computeGestaltUnity: Non-finite diffNorm for edge ${u}-${v}. Skipping addition to sum.`, { stalk_u, stalk_v });
                 }
             }
         });
+        if (!Number.isFinite(sum)) { logger.warn('Sheaf.computeGestaltUnity: Sum became non-finite. Setting to 0.'); sum = 0; }
         this.gestaltUnity = this.graph.edges.length > 0 ? clamp(sum / this.graph.edges.length, 0.05, 0.99) : 0.05;
-        if (!Number.isFinite(this.gestaltUnity)) this.gestaltUnity = 0.05;
+        if (!Number.isFinite(this.gestaltUnity)) { logger.error('Sheaf: Final gestaltUnity is non-finite. Setting to 0.05.'); this.gestaltUnity = 0.05; }
     }
 
     async computeIntegratedInformation() {
         const validStates = this.windowedStates.filter(isFiniteVector);
         if (validStates.length < Math.max(4, this.stateDim + this.qDim)) {
-            logger.warn('Not enough valid states for meaningful covariance calculation. Using base Phi.');
+            logger.warn('Sheaf: Not enough valid states for meaningful covariance calculation. Using base Phi.');
             this.phi = clamp(0.5 + (this.gestaltUnity || 0.1) * (this.stability || 0.1), 0.01, 5);
             return;
         }
@@ -687,31 +693,31 @@ export class EnhancedQualiaSheaf {
         try {
             cov = await runWorkerTask('covarianceMatrix', { states: validStates, eps: this.eps }, 10000);
             if (!isFiniteMatrix(cov)) {
-                 logger.warn("Worker returned non-finite covariance matrix. Setting MI to default.");
+                 logger.warn("Sheaf.computeIntegratedInformation: Worker returned non-finite covariance matrix. Setting MI to default.");
                  cov = zeroMatrix(validStates[0].length, validStates[0].length).map(row => row.fill(this.eps)); // Fallback
             }
         } catch (e) {
-            logger.error('Error computing covarianceMatrix in worker:', e);
+            logger.error('Sheaf.computeIntegratedInformation: Error computing covarianceMatrix in worker. Setting Phi to default:', e);
             this.phi = clamp(0.5 + (this.gestaltUnity || 0.1) * (this.stability || 0.1), 0.01, 5);
             return;
         }
 
         if (!isFiniteMatrix(cov)) {
-            logger.warn("Non-finite covariance matrix after worker call. Setting MI to default.");
+            logger.warn("Sheaf.computeIntegratedInformation: Non-finite covariance matrix after worker call. Setting MI to default.");
             this.phi = clamp(0.5 + (this.gestaltUnity || 0.1) * (this.stability || 0.1), 0.01, 5);
             return;
         }
 
         const MI_val = logDeterminantFromDiagonal(cov);
         const MI = Number.isFinite(MI_val) ? Math.abs(MI_val) * 0.1 + 1e-6 : 1e-6;
+        if (!Number.isFinite(MI)) { logger.warn('Sheaf.computeIntegratedInformation: MI value is non-finite. Setting to 1e-6.'); MI = 1e-6; }
         
         const safeStability = Number.isFinite(this.stability) ? this.stability : 0.1;
         const safeGestaltUnity = Number.isFinite(this.gestaltUnity) ? this.gestaltUnity : 0.1;
         const safeInconsistency = Number.isFinite(this.inconsistency) ? this.inconsistency : 1.0;
 
-        // Phase 1B: Incorporate h1Dimension into Phi for higher-order integration
         this.phi = clamp(Math.log(1 + MI) * safeStability * safeGestaltUnity * Math.exp(-safeInconsistency) * (1 + 0.05 * this.h1Dimension), 0.01, 5);
-        if (!Number.isFinite(this.phi)) this.phi = 0.01;
+        if (!Number.isFinite(this.phi)) { logger.error('Sheaf: Final Phi is non-finite. Setting to 0.01.'); this.phi = 0.01; }
     }
 
     visualizeActivity() {
@@ -734,7 +740,7 @@ export class EnhancedQualiaSheaf {
         });
     }
 
-    tuneParameters() {
+    async tuneParameters() {
         const currentStability = Number.isFinite(this.stability) ? this.stability : 0.5;
         const currentInconsistency = Number.isFinite(this.inconsistency) ? this.inconsistency : 0.5;
         const currentGestaltUnity = Number.isFinite(this.gestaltUnity) ? this.gestaltUnity : 0.5;
@@ -743,8 +749,6 @@ export class EnhancedQualiaSheaf {
         this.alpha = clamp(this.alpha * (1 + 0.02 * (1 - currentStability)) * (1 + 0.01 * currentInconsistency) * (1 + 0.005 * currentH1Dimension), 0.01, 1);
         this.beta = clamp(this.beta * (1 + 0.02 * (1 - currentGestaltUnity)) * (1 - 0.01 * currentH1Dimension), 0.01, 1);
         this.gamma = clamp(this.gamma * (1 - 0.05 * currentH1Dimension) * (1 - 0.02 * currentInconsistency) * (1 + 0.01 * currentStability), 0.01, 0.5);
-        
-        // logger.info(`Tuned parameters: Alpha=${this.alpha.toFixed(3)}, Beta=${this.beta.toFixed(3)}, Gamma=${this.gamma.toFixed(3)}, H1Dim=${currentH1Dimension.toFixed(2)}`);
     }
 }
 // --- END OF FILE qualia-sheaf.js ---
