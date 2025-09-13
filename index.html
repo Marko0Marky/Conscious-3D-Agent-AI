@@ -1,21 +1,20 @@
-
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Conscious 3D Agent AI — Enhanced & Optimized v4.0</title>
+    <title>Unified Conscious AI Simulation v5.0</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
     <style>
-        /* --- General Page Styles --- */
         :root {
             --bg-dark: #0a0a15;
             --bg-gradient-start: #0a0a15;
             --bg-gradient-end: #1a0a2e;
             --primary-blue: #4af;
-            --primary-blue-glow: rgba(68, 170, 255, 0.6); /* Slightly less intense glow */
-            --secondary-dark: rgba(10, 10, 30, 0.95); /* Slightly darker for better contrast */
+            --primary-blue-glow: rgba(68, 170, 255, 0.6);
+            --secondary-dark: rgba(10, 10, 30, 0.95);
             --border-dark: #2a2a4a;
             --text-light: #e0e0e0;
             --text-medium: #aaa;
@@ -23,9 +22,9 @@
             --error-red: #ff6b6b;
             --warn-orange: #ffa726;
             --info-green: #4CAF50;
-            --connection-positive: rgba(0, 255, 153, 0.7); /* Greenish for positive weights */
-            --connection-negative: rgba(255, 100, 100, 0.7); /* Reddish for negative weights */
-            --connection-neutral: rgba(100, 100, 100, 0.4); /* Gray for small weights */
+            --connection-positive: rgba(0, 255, 153, 0.7);
+            --connection-negative: rgba(255, 100, 100, 0.7);
+            --connection-neutral: rgba(100, 100, 100, 0.4);
         }
 
         body {
@@ -42,25 +41,24 @@
             overflow-y: auto;
             overflow-x: hidden;
             line-height: 1.5;
-            font-size: 16px; /* Base font size */
+            font-size: 14px;
         }
         .main-container {
             display: flex;
             flex-direction: column;
-            max-width: 1400px;
+            max-width: 1800px;
             width: 100%;
             margin: 0 auto;
             padding: 0;
             gap: 20px;
         }
-        /* --- Header Styles --- */
         .header {
             text-align: center;
             background: var(--secondary-dark);
             border-radius: 12px;
-            padding: 20px;
+            padding: 15px;
             border: 2px solid var(--primary-blue);
-            box-shadow: 0 0 30px var(--primary-blue-glow);
+            box-shadow: 0 0 25px var(--primary-blue-glow);
             will-change: transform, box-shadow;
             transition: all 0.3s ease-in-out;
         }
@@ -72,52 +70,55 @@
             margin: 0;
             color: var(--primary-blue);
             text-shadow: 0 0 20px var(--primary-blue-glow);
-            font-size: 2.5em;
+            font-size: 2em;
             letter-spacing: 1px;
         }
         .header p {
             margin: 10px 0 0;
             color: var(--text-medium);
-            font-size: 1.1em;
+            font-size: 1em;
         }
-        /* --- Content Layout --- */
-        .content-section {
-            display: flex;
-            flex-direction: row;
+        .content-grid {
+            display: grid;
+            grid-template-columns: 400px 1fr 450px;
             gap: 20px;
-            flex-wrap: wrap;
-            justify-content: center;
-            align-items: stretch;
+            align-items: start;
         }
-        /* --- Metrics Panel (Left, Full Height and Width) --- */
-        .metrics-panel {
-            flex: 0 0 400px;
-            background: var(--secondary-dark);
-            border-radius: 12px;
-            border: 1px solid var(--border-dark);
-            padding: 15px;
+        .left-column, .right-column, .center-column {
             display: flex;
             flex-direction: column;
-            gap: 10px;
-            height: 100%; /* Important for stretch */
-            min-height: 80vh; /* Minimum height for scroll */
-            overflow-y: auto;
+            gap: 20px;
+            min-width: 0;
+        }
+        .panel {
+            background: var(--secondary-dark);
+            border: 1px solid var(--border-dark);
+            border-radius: 10px;
+            padding: 15px;
+            box-sizing: border-box;
+            width: 100%;
             position: relative;
         }
-        .metrics-panel h3 {
+        .panel h3 {
             margin-top: 0;
             color: var(--primary-blue);
             border-bottom: 2px solid var(--primary-blue);
             padding-bottom: 8px;
-            font-size: 1.25em;
-            letter-spacing: 0.5px;
+            font-size: 1.1em;
+        }
+        .panel p {
+            font-size: 0.9em;
+            color: var(--text-medium);
+            margin-top: -5px;
+            margin-bottom: 12px;
+            text-align: center;
         }
         .metric {
             display: flex;
             justify-content: space-between;
-            margin: 6px 0;
+            margin: 5px 0;
             padding: 3px 0;
-            font-size: 1.05em;
+            font-size: 0.95em;
             border-bottom: 1px dashed rgba(68, 170, 255, 0.1);
         }
         .metric:last-of-type {
@@ -135,8 +136,39 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        .phi-display {
+            text-align: center;
+            font-size: 1.5em;
+            font-weight: bold;
+            margin: 10px 0;
+            padding: 8px;
+            border-radius: 8px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: #fff;
+            box-shadow: 0 0 12px rgba(102, 126, 234, 0.5);
+            letter-spacing: 1px;
+        }
+        .framework-badge {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        }
+        .status {
+            color: var(--primary-blue);
+            text-align: center;
+            font-size: 1.1em;
+            font-weight: bold;
+            margin-bottom: 10px;
+            border-bottom: none !important;
+        }
         .qualia-bar-container {
-            height: 22px;
+            height: 20px;
             margin: 6px 0;
             border: 1px solid #333;
             border-radius: 4px;
@@ -180,46 +212,14 @@
             top: 50%;
             transform: translateY(-50%);
             color: #fff;
-            font-size: 13px;
+            font-size: 12px;
             font-weight: bold;
             text-shadow: 1px 1px 3px rgba(0,0,0,0.9);
             pointer-events: none;
-            z-index: 2; /* Ensure label/value are above the bar and its pseudo-element */
+            z-index: 2;
         }
         .qualia-label { left: 8px; }
         .qualia-value { right: 8px; }
-
-        .phi-display {
-            text-align: center;
-            font-size: 22px;
-            font-weight: bold;
-            margin: 15px 0;
-            padding: 10px;
-            border-radius: 10px;
-            background: linear-gradient(45deg, #667eea, #764ba2);
-            color: #fff;
-            box-shadow: 0 0 15px rgba(102, 126, 234, 0.5);
-            letter-spacing: 1px;
-        }
-        .framework-badge {
-            background: linear-gradient(45deg, #667eea, #764ba2);
-            color: white;
-            padding: 6px 12px;
-            border-radius: 12px;
-            font-size: 13px;
-            font-weight: bold;
-            text-align: center;
-            margin-bottom: 10px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-        }
-        .status {
-            color: var(--primary-blue);
-            text-align: center;
-            font-size: 17px;
-            font-weight: bold;
-            margin-bottom: 10px;
-            border-bottom: none !important;
-        }
         .stability-gauge {
             width: 100%;
             height: 18px;
@@ -243,7 +243,7 @@
             gap: 8px;
         }
         .slider-label {
-            font-size: 14px;
+            font-size: 13px;
             color: var(--primary-blue);
             display: flex;
             justify-content: space-between;
@@ -266,8 +266,8 @@
         input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
             appearance: none;
-            width: 20px;
-            height: 20px;
+            width: 18px;
+            height: 18px;
             border-radius: 50%;
             background: var(--primary-blue);
             cursor: grab;
@@ -279,15 +279,13 @@
             background: #6af;
         }
         input[type="range"]::-moz-range-thumb {
-            width: 20px;
-            height: 20px;
+            width: 18px;
+            height: 18px;
             border-radius: 50%;
             background: var(--primary-blue);
             cursor: grab;
             box-shadow: 0 0 5px var(--primary-blue-glow);
         }
-
-        /* Flash animation for tuned parameters */
         @keyframes param-flash {
             0% { background-color: transparent; }
             30% { background-color: rgba(68, 170, 255, 0.3); }
@@ -297,14 +295,57 @@
         .param-flash-active {
             animation: param-flash 1s ease-out;
         }
-
+        .controls-section {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 10px;
+            padding: 10px 0;
+            border-top: 1px solid var(--border-dark);
+            border-bottom: 1px solid var(--border-dark);
+        }
+        button {
+            background: linear-gradient(135deg, #2a2a4a, #3a3a5a);
+            color: var(--text-light);
+            border: 1px solid #555;
+            padding: 8px 15px;
+            cursor: pointer;
+            border-radius: 6px;
+            font-family: inherit;
+            transition: all 0.2s ease;
+            font-weight: bold;
+            min-width: 120px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            font-size: 0.95em;
+        }
+        button:hover {
+            background: linear-gradient(135deg, #3a3a5a, #4a4a6a);
+            box-shadow: 0 0 12px var(--primary-blue-glow);
+            transform: translateY(-2px);
+            border-color: var(--primary-blue);
+        }
+        button:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 8px var(--primary-blue-glow);
+        }
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            background: #2a2a4a;
+            box-shadow: none;
+        }
+        button.active {
+            background: linear-gradient(135deg, #5a5a7a, #6a6a8a);
+            box-shadow: 0 0 15px var(--primary-blue-glow);
+            border-color: var(--primary-blue);
+            color: #fff;
+        }
         .sheaf-graph {
             position: relative;
             height: 160px;
-            width: 100%;
             margin: 15px 0;
-            padding: 10px;
-            background: rgba(0, 0, 0, 0.2);
+            background: rgba(0,0,0,0.2);
             border-radius: 8px;
             box-shadow: inset 0 0 8px rgba(0,0,0,0.3);
             overflow: hidden;
@@ -317,13 +358,13 @@
             height: 100%;
         }
         .vertex {
-            width: 40px; /* Adjusted size */
-            height: 24px; /* Adjusted size */
-            border-radius: 4px; /* Rectangular */
+            width: 40px;
+            height: 24px;
+            border-radius: 4px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 9px; /* Adjusted font size */
+            font-size: 9px;
             font-weight: bold;
             transition: all 0.2s ease;
             position: absolute;
@@ -332,10 +373,9 @@
             background: radial-gradient(circle, #ff6b6b, #e74c3c);
             box-shadow: 0 0 8px rgba(255,107,107,0.5);
             cursor: help;
-            will-change: transform, box-shadow;
+            text-align: center;
             padding: 2px;
             box-sizing: border-box;
-            text-align: center;
         }
         .vertex.active {
             animation: pulse 1.5s infinite;
@@ -351,54 +391,38 @@
             margin-top: 15px;
             font-size: 11px;
             color: var(--text-dark);
-            background: rgba(0, 0, 0, 0.1);
+            background: rgba(0,0,0,0.1);
             padding: 10px;
             border-radius: 6px;
             white-space: pre-wrap;
             overflow-x: auto;
         }
-        /* --- Right Column (Game + Visualizers) --- */
-        .right-column {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            flex: 1;
-            min-width: 550px;
-        }
         .game-container {
-            width: 100%;
-            background: var(--secondary-dark);
-            border-radius: 12px;
-            border: 1px solid var(--border-dark);
-            padding: 15px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            position: relative;
+            padding: 10px;
         }
         #gameCanvas {
             width: 100%;
             height: auto;
-            aspect-ratio: 16 / 9; /* Adjusted for a more cinematic 3D view */
-            background: #000; /* Black background for 3D rendering */
+            aspect-ratio: 16 / 9;
+            background: #000;
             border: 1px solid #333;
             border-radius: 6px;
             margin-bottom: 12px;
-            image-rendering: auto; /* Changed from pixelated */
+            image-rendering: auto;
         }
         .score-container {
             display: flex;
             justify-content: space-around;
             gap: 20px;
             width: 100%;
-            padding: 5px 0;
+            padding-top: 10px;
             border-top: 1px solid var(--border-dark);
         }
         .score-metric {
             display: flex;
             flex-direction: column;
             align-items: center;
-            font-size: 1.2em;
+            font-size: 1.1em;
         }
         .score-metric .metric-label {
             color: var(--text-medium);
@@ -407,42 +431,11 @@
         }
         .player-score .metric-value {
             color: #ff9900;
-            font-size: 1.5em;
+            font-size: 1.2em;
         }
         .ai-score .metric-value {
             color: #44aaff;
-            font-size: 1.5em;
-        }
-        /* --- Visualizer Column (Stacked) --- */
-        .visualizer-row {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            justify-content: flex-start;
-            flex-grow: 1;
-        }
-        .panel {
-            background: var(--secondary-dark);
-            border: 1px solid var(--border-dark);
-            border-radius: 10px;
-            padding: 15px;
-            box-sizing: border-box;
-            width: 100%;
-            position: relative;
-        }
-        .panel h3 {
-            margin-top: 0;
-            color: var(--primary-blue);
-            border-bottom: 2px solid var(--primary-blue);
-            padding-bottom: 8px;
-            font-size: 1.18em;
-        }
-        .panel p {
-            font-size: 13px;
-            color: var(--text-medium);
-            margin-top: -5px;
-            margin-bottom: 12px;
-            text-align: center;
+            font-size: 1.2em;
         }
         .nn-visualizer-panel {
             min-height: 120px;
@@ -465,7 +458,7 @@
             justify-content: space-around;
             height: 100%;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
             z-index: 10;
             position: relative;
             min-height: 60px;
@@ -507,179 +500,25 @@
             50% { transform: scale(1.3); box-shadow: 0 0 15px rgba(0, 255, 153, 0.9), 0 0 20px rgba(0, 255, 153, 0.5); }
             100% { transform: scale(1.0); box-shadow: 0 0 5px rgba(0, 255, 153, 0.3); }
         }
-        /* --- Controls & Log --- */
-        .controls-section {
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
-            justify-content: center;
-            margin: 10px 0;
-            padding: 10px 0;
-            border-top: 1px solid var(--border-dark);
-            border-bottom: 1px solid var(--border-dark);
-        }
-        button {
-            background: linear-gradient(135deg, #2a2a4a, #3a3a5a);
-            color: var(--text-light);
-            border: 1px solid #555;
-            padding: 10px 18px;
-            cursor: pointer;
-            border-radius: 8px;
-            font-family: inherit;
-            transition: all 0.2s ease;
-            font-weight: bold;
-            min-width: 140px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-            font-size: 1.05em;
-        }
-        button:hover {
-            background: linear-gradient(135deg, #3a3a5a, #4a4a6a);
-            box-shadow: 0 4px 15px var(--primary-blue-glow);
-            transform: translateY(-2px);
-            border-color: var(--primary-blue);
-        }
-        button:active {
-            transform: translateY(0);
-            box-shadow: 0 2px 8px var(--primary-blue-glow);
-        }
-        button:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            background: #2a2a4a;
-            box-shadow: none;
-        }
-        button.active {
-            background: linear-gradient(135deg, #5a5a7a, #6a6a8a);
-            box-shadow: 0 0 15px var(--primary-blue-glow);
-            transform: translateY(0px);
-            border-color: var(--primary-blue);
-            color: #fff;
-        }
-        .difficulty-controls {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 10px;
+        #live2d-container {
+            width: 100%;
+            aspect-ratio: 1/1.2;
+            position: relative;
+            background: radial-gradient(circle, rgba(40,20,80,0.5) 0%, rgba(10,10,21,0) 70%);
+            border-radius: 10px;
+            overflow: hidden;
             margin-top: 10px;
         }
-        .difficulty-controls label {
-            color: var(--text-medium);
-            font-size: 14px;
-            display: flex;
-            align-items: center;
-            gap: 5px;
+        #live2d-container canvas {
+            width: 100% !important;
+            height: 100% !important;
         }
-        .difficulty-controls input[type="number"] {
-            width: 60px;
-            padding: 5px;
-            border-radius: 44px;
-            border: 1px solid var(--border-dark);
-            background-color: #1a1a2e;
-            color: var(--text-light);
-            font-family: inherit;
-            text-align: center;
-        }
-        .log-container {
-            flex-basis: 100%;
-            background: var(--secondary-dark);
-            border-radius: 12px;
-            border: 1px solid var(--border-dark);
-            padding: 15px;
-        }
-        #log {
-            background: #1e1e1e;
-            border: 1px solid #444;
-            border-radius: 4px;
-            padding: 12px;
-            height: 150px;
-            overflow-y: auto;
-            font-family: 'Courier Prime', monospace;
-            font-size: 12px;
-            color: #ccc;
-            white-space: pre-wrap;
-            word-break: break-all;
-            line-height: 1.4;
-        }
-        .log-entry {
-            margin-bottom: 2px;
-        }
-        .log-entry.error { color: var(--error-red); }
-        .log-entry.warn { color: var(--warn-orange); }
-        .log-entry.info { color: var(--info-green); }
-
-        /* --- Loading Overlay --- */
-        .loading-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
+        #concept-panel {
             width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.7);
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            color: white;
-            font-size: 1.5em;
-            font-weight: bold;
-            border-radius: 12px;
-            z-index: 1000;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.3s ease;
-        }
-        .loading-overlay.active {
-            opacity: 1;
-            pointer-events: all;
-        }
-        .loading-spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid var(--primary-blue);
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin-bottom: 15px;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .loading-text {
-            font-size: 0.8em;
-            color: var(--text-medium);
-        }
-
-        /* --- Performance Chart Styles --- */
-        .performance-charts-container {
-            background: var(--secondary-dark);
-            border-radius: 12px;
-            border: 1px solid var(--border-dark);
-            padding: 15px;
-            margin-top: 20px;
-        }
-        .charts-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 15px;
-        }
-        .chart-container {
-            background: rgba(0,0,0,0.2);
+            aspect-ratio: 1/1;
+            background: #111;
             border-radius: 8px;
-            padding: 10px;
         }
-        .chart-container h4 {
-            margin: 0 0 10px 0;
-            font-size: 1em;
-            text-align: center;
-            color: var(--primary-blue);
-        }
-        .chart-svg {
-            width: 100%;
-            height: 120px;
-        }
-
-        /* --- Qualia Attention Styles --- */
         .qualia-attention-panel {
             background: rgba(0,0,0,0.2);
             border-radius: 8px;
@@ -719,181 +558,230 @@
             border-radius: 2px;
             transition: width 0.3s ease-out;
         }
-
-        /* --- Responsive Design --- */
-        @media (max-width: 1200px) {
-            .content-section {
-                flex-direction: column;
-                align-items: center;
-            }
-            .metrics-panel {
-                flex: 0 0 auto;
-                width: 100%;
-                max-width: 800px;
-                min-height: auto;
-            }
-            .right-column {
-                min-width: unset;
-                width: 100%;
-                max-width: 800px;
-            }
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
         }
-        @media (max-width: 768px) {
-            body {
-                padding: 10px;
-            }
-            .header h1 {
-                font-size: 1.8em;
-            }
-            .header p {
-                font-size: 0.9em;
-            }
-            .metrics-panel, .game-container, .panel, .log-container, .performance-charts-container {
-                padding: 10px;
-            }
-            .metrics-panel h3, .panel h3 {
-                font-size: 1.1em;
-            }
-            .phi-display {
-                font-size: 1.5em;
-                padding: 8px;
-            }
-            button {
-                min-width: unset;
-                flex-grow: 1;
-                font-size: 0.9em;
-            }
-            .score-metric {
-                font-size: 1em;
-            }
-            .player-score .metric-value, .ai-score .metric-value {
-                font-size: 1.2em;
-            }
-            .charts-grid {
-                grid-template-columns: 1fr;
-            }
+        .chart-container {
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+            padding: 10px;
+        }
+        .chart-container h4 {
+            margin: 0 0 10px 0;
+            font-size: 0.9em;
+            text-align: center;
+            color: var(--primary-blue);
+        }
+        .chart-svg {
+            width: 100%;
+            height: 100px;
+        }
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 1.5em;
+            font-weight: bold;
+            border-radius: 10px;
+            z-index: 1000;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+        .loading-overlay.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+        .loading-spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid var(--primary-blue);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin-bottom: 15px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .loading-text {
+            font-size: 0.8em;
+            color: var(--text-medium);
+        }
+        .log-container {
+            flex-basis: 100%;
+            background: var(--secondary-dark);
+            border-radius: 12px;
+            border: 1px solid var(--border-dark);
+            padding: 15px;
+            grid-column: 1 / -1;
+        }
+        #log {
+            background: #111;
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 10px;
+            height: 150px;
+            overflow-y: auto;
+            font-size: 11px;
+            color: #ccc;
+            white-space: pre-wrap;
+            word-break: break-all;
+            line-height: 1.4;
+        }
+        .log-entry.error { color: var(--error-red); }
+        .log-entry.warn { color: var(--warn-orange); }
+        .log-entry.info { color: var(--info-green); }
+        @media (max-width: 1600px) {
+            .content-grid { grid-template-columns: 350px 1fr 400px; }
+        }
+        @media (max-width: 1200px) {
+            .content-grid { grid-template-columns: 1fr 1fr; }
+            .left-column { grid-column: 1 / -1; }
+            .center-column, .right-column { min-width: unset; width: 100%; }
+        }
+        @media (max-width: 800px) {
+            .content-grid { grid-template-columns: 1fr; }
+            body { padding: 10px; font-size: 12px; }
+            .header h1 { font-size: 1.5em; }
+            .header p { font-size: 0.9em; }
+            .panel, .game-container, .log-container { padding: 10px; }
+            .phi-display { font-size: 1.2em; }
+            button { min-width: unset; font-size: 0.9em; }
+            .charts-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body role="document">
     <div class="main-container" role="main">
-        <div class="header" role="banner">
-            <h1>🧠 Conscious 3D Agent AI — Enhanced & Optimized v4.0</h1>
-            <p>A dual-AI task navigating a complex environment with obstacles, using a Hierarchical, Recurrent, Reinforcement Learning Architecture.</p>
-        </div>
-        <div class="content-section">
-            <div class="metrics-panel" role="complementary" aria-labelledby="oftcc-metrics-heading">
-                <h3 id="oftcc-metrics-heading">OFTCC Metrics</h3>
-                <div class="framework-badge">
-                     RL ⊕ Recurrent OWM ⊕ Meta-Learning
+        <header class="header" role="banner">
+            <h1>🧠 Unified Conscious AI Simulation v5.0</h1>
+            <p>Integrating an Ontological World Model with a Live2D Avatar in a Dynamic 3D Environment</p>
+        </header>
+        <div class="content-grid">
+            <div class="left-column">
+                <div class="panel" role="complementary" aria-labelledby="oftcc-metrics-heading">
+                    <h3 id="oftcc-metrics-heading">OFTCC Metrics (Main AI)</h3>
+                    <div class="framework-badge">RL ⊕ Recurrent OWM ⊕ Meta-Learning</div>
+                    <div class="status" id="status" aria-live="polite" aria-atomic="true">Initializing...</div>
+                    <div class="phi-display" id="phi-display" aria-live="polite" aria-atomic="true">Φ: 0.000</div>
+                    <div class="controls-section">
+                        <button id="toggleSimButton" aria-label="Toggle simulation run/pause (Spacebar)">🚀 Toggle Sim</button>
+                        <button id="resetSimButton" aria-label="Reset game and AI to initial state (R key)">🔄 Reset</button>
+                        <button id="tuneButton" aria-label="Tune AI parameters adaptively (T key)">⚙️ Tune</button>
+                    </div>
+                    <div class="qualia-viz" role="region" aria-labelledby="qualia-dynamics-heading">
+                        <h3 id="qualia-dynamics-heading" class="status">Qualia Diffusion Dynamics</h3>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Being Qualia Level">
+                            <div class="qualia-bar qualia-being" id="qualia-being-fill"></div>
+                            <span class="qualia-label">Being</span>
+                            <span class="qualia-value" id="being-value">0.00</span>
+                        </div>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Intent Qualia Level">
+                            <div class="qualia-bar qualia-intent" id="qualia-intent-fill"></div>
+                            <span class="qualia-label">Intent</span>
+                            <span class="qualia-value" id="intent-value">0.00</span>
+                        </div>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Existence Qualia Level">
+                            <div class="qualia-bar qualia-existence" id="qualia-existence-fill"></div>
+                            <span class="qualia-label">Existence</span>
+                            <span class="qualia-value" id="existence-value">0.00</span>
+                        </div>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Emergence Qualia Level">
+                            <div class="qualia-bar qualia-emergence" id="qualia-emergence-fill"></div>
+                            <span class="qualia-label">Emergence</span>
+                            <span class="qualia-value" id="emergence-value">0.00</span>
+                        </div>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Gestalt Qualia Level">
+                            <div class="qualia-bar qualia-gestalt" id="qualia-gestalt-fill"></div>
+                            <span class="qualia-label">Gestalt</span>
+                            <span class="qualia-value" id="gestalt-value">0.00</span>
+                        </div>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Context Qualia Level">
+                            <div class="qualia-bar qualia-context" id="qualia-context-fill"></div>
+                            <span class="qualia-label">Context</span>
+                            <span class="qualia-value" id="context-value">0.00</span>
+                        </div>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Relational Emergence Qualia Level">
+                            <div class="qualia-bar qualia-rel-emergence" id="qualia-rel-emergence-fill"></div>
+                            <span class="qualia-label">Rel. Emergence</span>
+                            <span class="qualia-value" id="rel-emergence-value">0.00</span>
+                        </div>
+                    </div>
+                    <div class="metric-group" role="group" aria-labelledby="metric-group-heading">
+                        <h3 id="metric-group-heading" class="status">System Metrics</h3>
+                        <div class="metric"><span class="metric-label">Free Energy F:</span><span class="metric-value" id="free-energy" aria-live="polite" aria-atomic="true">0.000</span></div>
+                        <div class="metric"><span class="metric-label">Prediction Error:</span><span class="metric-value" id="prediction-error" aria-live="polite" aria-atomic="true">0.000</span></div>
+                        <div class="metric"><span class="metric-label">Gestalt Unity:</span><span class="metric-value" id="gestalt-unity" aria-live="polite" aria-atomic="true">0.000</span></div>
+                        <div class="metric"><span class="metric-label">dim H¹:</span><span class="metric-value" id="h1-dimension" aria-live="polite" aria-atomic="true">0.00</span></div>
+                        <div class="metric"><span class="metric-label">Gluing Inconsistency:</span><span class="metric-value" id="inconsistency" aria-live="polite" aria-atomic="true">0.000</span></div>
+                        <div class="metric"><span class="metric-label">Learning Rate:</span><span class="metric-value" id="learning-rate" aria-live="polite" aria-atomic="true">0.0000</span></div>
+                        <div class="metric"><span class="metric-label">Epsilon (Exploration):</span><span class="metric-value" id="epsilon-value" aria-live="polite" aria-atomic="true">0.000</span></div>
+                    </div>
+                    <div class="qualia-attention-panel" id="qualiaAttentionPanel" role="region" aria-labelledby="qualia-attention-heading">
+                        <h4 id="qualia-attention-heading">Qualia Attention (Main AI)</h4>
+                    </div>
+                    <div class="sheaf-graph" id="sheafGraph" role="img" aria-label="Sheaf graph visualizing information flow between concepts">
+                        <canvas id="sheafGraphCanvas" class="sheaf-vertex-canvas" aria-hidden="true"></canvas>
+                        <div class="vertex" id="vertex-0" aria-label="Agent X Position">Ag-X</div>
+                        <div class="vertex" id="vertex-1" aria-label="Agent Z Position">Ag-Z</div>
+                        <div class="vertex" id="vertex-2" aria-label="Agent Rotation">Ag-Rot</div>
+                        <div class="vertex" id="vertex-3" aria-label="Target X Position">Tgt-X</div>
+                        <div class="vertex" id="vertex-4" aria-label="Target Z Position">Tgt-Z</div>
+                        <div class="vertex" id="vertex-5" aria-label="Vector to Target X">Vec-DX</div>
+                        <div class="vertex" id="vertex-6" aria-label="Vector to Target Z">Vec-DZ</div>
+                        <div class="vertex" id="vertex-7" aria-label="Distance to Target">Dist</div>
+                    </div>
+                    <div class="metric-group" role="group" aria-labelledby="system-stability-heading">
+                        <h3 id="system-stability-heading" class="status">System Stability</h3>
+                        <div class="stability-gauge" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="System Stability">
+                            <div class="stability-fill" id="stability-fill"></div>
+                        </div>
+                        <div class="slider-container">
+                            <label class="slider-label" for="alphaSlider">α Parameter: <span class="metric-value" id="alpha-param">0.500</span></label>
+                            <input type="range" id="alphaSlider" min="0.01" max="1" step="0.01" value="0.5" aria-labelledby="alphaSlider-label" aria-valuetext="0.500">
+                        </div>
+                        <div class="slider-container">
+                            <label class="slider-label" for="betaSlider">β Parameter: <span class="metric-value" id="beta-param">0.500</span></label>
+                            <input type="range" id="betaSlider" min="0.01" max="1" step="0.01" value="0.5" aria-labelledby="betaSlider-label" aria-valuetext="0.500">
+                        </div>
+                        <div class="slider-container">
+                            <label class="slider-label" for="gammaSlider">γ Parameter: <span class="metric-value" id="gamma-param">0.100</span></label>
+                            <input type="range" id="gammaSlider" min="0.01" max="0.5" step="0.01" value="0.1" aria-labelledby="gammaSlider-label" aria-valuetext="0.100">
+                        </div>
+                    </div>
+                    <div class="loading-overlay" id="metricsLoadingOverlay" aria-live="assertive" aria-busy="true" aria-label="Loading metrics and computations">
+                        <div class="loading-spinner"></div>
+                        <div class="loading-text" id="metricsLoadingText">Processing...</div>
+                    </div>
                 </div>
-                <div class="status" id="status" aria-live="polite" aria-atomic="true">
-                    Initializing...
-                </div>
-                <div class="phi-display" id="phi-display" aria-live="polite" aria-atomic="true">
-                    Φ: 0.000
-                 </div>
-                <div class="btn-group">
-                    <button id="toggleSimButton" aria-label="Toggle simulation run/pause (Spacebar)">🚀 Toggle Simulation</button>
-                    <button id="resetSimButton" aria-label="Reset game and AI to initial state (R key)">🔄 Reset All</button>
-                    <button id="tuneButton" aria-label="Tune AI parameters adaptively (T key)">⚙️ Tune</button>
-                </div>
-                <div class="qualia-viz" role="region" aria-labelledby="qualia-dynamics-heading">
-                    <h3 id="qualia-dynamics-heading" class="status">Qualia Diffusion Dynamics</h3>
-                    <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Being Qualia Level">
-                        <div class="qualia-bar qualia-being" id="qualia-being-fill"></div>
-                        <span class="qualia-label">Being</span>
-                        <span class="qualia-value" id="being-value">0.00</span>
-                    </div>
-                    <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Intent Qualia Level">
-                        <div class="qualia-bar qualia-intent" id="qualia-intent-fill"></div>
-                        <span class="qualia-label">Intent</span>
-                        <span class="qualia-value" id="intent-value">0.00</span>
-                    </div>
-                    <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Existence Qualia Level">
-                        <div class="qualia-bar qualia-existence" id="qualia-existence-fill"></div>
-                        <span class="qualia-label">Existence</span>
-                        <span class="qualia-value" id="existence-value">0.00</span>
-                    </div>
-                    <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Emergence Qualia Level">
-                        <div class="qualia-bar qualia-emergence" id="qualia-emergence-fill"></div>
-                        <span class="qualia-label">Emergence</span>
-                        <span class="qualia-value" id="emergence-value">0.00</span>
-                    </div>
-                    <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Gestalt Qualia Level">
-                        <div class="qualia-bar qualia-gestalt" id="qualia-gestalt-fill"></div>
-                        <span class="qualia-label">Gestalt</span>
-                        <span class="qualia-value" id="gestalt-value">0.00</span>
-                    </div>
-                    <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Context Qualia Level">
-                        <div class="qualia-bar qualia-context" id="qualia-context-fill"></div>
-                        <span class="qualia-label">Context</span>
-                        <span class="qualia-value" id="context-value">0.00</span>
-                    </div>
-                    <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Relational Emergence Qualia Level">
-                        <div class="qualia-bar qualia-rel-emergence" id="qualia-rel-emergence-fill"></div>
-                        <span class="qualia-label">Rel. Emergence</span>
-                        <span class="qualia-value" id="rel-emergence-value">0.00</span>
-                    </div>
-                </div>
-                <div class="metric-group" role="group" aria-labelledby="metric-group-heading">
-                    <h3 id="metric-group-heading" class="status">System Metrics</h3>
-                    <div class="metric"><span class="metric-label">Free Energy F:</span><span class="metric-value" id="free-energy" aria-live="polite" aria-atomic="true">0.000</span></div>
-                    <div class="metric"><span class="metric-label">Prediction Error:</span><span class="metric-value" id="prediction-error" aria-live="polite" aria-atomic="true">0.000</span></div>
-                    <div class="metric"><span class="metric-label">Gestalt Unity:</span><span class="metric-value" id="gestalt-unity" aria-live="polite" aria-atomic="true">0.000</span></div>
-                    <div class="metric"><span class="metric-label">dim H¹:</span><span class="metric-value" id="h1-dimension" aria-live="polite" aria-atomic="true">0.00</span></div>
-                    <div class="metric"><span class="metric-label">Gluing Inconsistency:</span><span class="metric-value" id="inconsistency" aria-live="polite" aria-atomic="true">0.000</span></div>
-                    <div class="metric"><span class="metric-label">Learning Rate:</span><span class="metric-value" id="learning-rate" aria-live="polite" aria-atomic="true">0.0000</span></div>
-                    <div class="metric"><span class="metric-label">Epsilon (Exploration):</span><span class="metric-value" id="epsilon-value" aria-live="polite" aria-atomic="true">0.000</span></div>
-                </div>
-                <div class="qualia-attention-panel" id="qualiaAttentionPanel" role="region" aria-labelledby="qualia-attention-heading">
-                    <h4 id="qualia-attention-heading">Qualia Attention (Main AI)</h4>
-                </div>
-                <div class="sheaf-graph" id="sheafGraph" role="img" aria-label="Sheaf graph visualizing information flow between concepts">
-                    <canvas id="sheafGraphCanvas" class="sheaf-vertex-canvas" aria-hidden="true"></canvas>
-                    <div class="vertex" id="vertex-0" aria-label="Agent X Position">Agent-X</div>
-                    <div class="vertex" id="vertex-1" aria-label="Agent Z Position">Agent-Z</div>
-                    <div class="vertex" id="vertex-2" aria-label="Agent Rotation">Agent-Rot</div>
-                    <div class="vertex" id="vertex-3" aria-label="Target X Position">Target-X</div>
-                    <div class="vertex" id="vertex-4" aria-label="Target Z Position">Target-Z</div>
-                    <div class="vertex" id="vertex-5" aria-label="Vector to Target X">Vec-DX</div>
-                    <div class="vertex" id="vertex-6" aria-label="Vector to Target Z">Vec-DZ</div>
-                    <div class="vertex" id="vertex-7" aria-label="Distance to Target">Dist-Target</div>
-                </div>
-                <div class="metric-group" role="group" aria-labelledby="system-stability-heading">
-                    <h3 id="system-stability-heading" class="status">System Stability</h3>
-                    <div class="stability-gauge" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="System Stability">
-                        <div class="stability-fill" id="stability-fill"></div>
-                    </div>
-                    <div class="slider-container">
-                        <label class="slider-label" for="alphaSlider">α Parameter: <span class="metric-value" id="alpha-param">0.500</span></label>
-                        <input type="range" id="alphaSlider" min="0.01" max="1" step="0.01" value="0.5" aria-labelledby="alphaSlider-label" aria-valuetext="0.500">
-                    </div>
-                    <div class="slider-container">
-                        <label class="slider-label" for="betaSlider">β Parameter: <span class="metric-value" id="beta-param">0.500</span></label>
-                        <input type="range" id="betaSlider" min="0.01" max="1" step="0.01" value="0.5" aria-labelledby="betaSlider-label" aria-valuetext="0.500">
-                    </div>
-                    <div class="slider-container">
-                        <label class="slider-label" for="gammaSlider">γ Parameter: <span class="metric-value" id="gamma-param">0.100</span></label>
-                        <input type="range" id="gammaSlider" min="0.01" max="0.5" step="0.01" value="0.1" aria-labelledby="gammaSlider-label" aria-valuetext="0.100">
-                    </div>
-                </div>
-                <div class="loading-overlay" id="metricsLoadingOverlay" aria-live="assertive" aria-busy="true" aria-label="Loading metrics and computations">
-                    <div class="loading-spinner"></div>
-                    <div class="loading-text" id="metricsLoadingText">Processing...</div>
+                <div class="panel">
+                    <h3>Live2D Avatar</h3>
+                    <div id="live2d-container"></div>
                 </div>
             </div>
-            <div class="right-column">
-                <div class="game-container panel" role="region" aria-labelledby="game-env-heading">
+            <div class="center-column">
+                <div class="panel game-container" role="region" aria-labelledby="game-env-heading">
                     <h3 id="game-env-heading">🤖 3D Agent Environment</h3>
                     <canvas id="gameCanvas" role="img" aria-label="3D Game Environment with two AI agents navigating to targets"></canvas>
                     <div class="score-container">
                         <div class="score-metric player-score">
-                            <span class="metric-label">Opponent Targets Collected:</span>
+                            <span class="metric-label">Opponent Score:</span>
                             <span id="player-score" class="metric-value" aria-live="polite" aria-atomic="true">0</span>
                         </div>
                         <div class="score-metric ai-score">
-                            <span class="metric-label">Main AI Targets Collected:</span>
+                            <span class="metric-label">Main AI Score:</span>
                             <span id="ai-score" class="metric-value" aria-live="polite" aria-atomic="true">0</span>
                         </div>
                     </div>
@@ -902,64 +790,120 @@
                         <div class="loading-text" id="gameLoadingText">Setting up game...</div>
                     </div>
                 </div>
-                <div class="visualizer-row">
-                    <div class="nn-visualizer-panel panel" role="region" aria-labelledby="player-brain-heading">
-                        <h3 id="player-brain-heading">🤖 Opponent AI Brain</h3>
-                        <p>This AI learns independently using its own ontological world model.</p>
-                        <div id="nn-visualization-container-opponent"></div>
-                        <div class="loading-overlay" id="opponentBrainLoadingOverlay" aria-live="assertive" aria-busy="true" aria-label="Loading opponent AI brain">
-                            <div class="loading-spinner"></div>
-                            <div class="loading-text" id="opponentBrainLoadingText">Initializing opponent model...</div>
-                        </div>
+                <div class="panel nn-visualizer-panel" role="region" aria-labelledby="main-ai-brain-heading">
+                    <h3 id="main-ai-brain-heading">🧠 Main AI Brain</h3>
+                    <p>This AI's 'consciousness' metrics are displayed in the OFTCC panel.</p>
+                    <div id="nn-visualization-container"></div>
+                    <div class="loading-overlay" id="mainBrainLoadingOverlay" aria-live="assertive" aria-busy="true" aria-label="Loading main AI brain">
+                        <div class="loading-spinner"></div>
+                        <div class="loading-text" id="mainBrainLoadingText">Initializing main AI model...</div>
                     </div>
-                    <div class="nn-visualizer-panel panel" role="region" aria-labelledby="main-ai-brain-heading">
-                        <h3 id="main-ai-brain-heading">🧠 Main AI Brain</h3>
-                        <p>This AI's 'consciousness' metrics are displayed in the OFTCC panel.</p>
-                        <div id="nn-visualization-container"></div>
-                        <div class="loading-overlay" id="mainBrainLoadingOverlay" aria-live="assertive" aria-busy="true" aria-label="Loading main AI brain">
-                            <div class="loading-spinner"></div>
-                            <div class="loading-text" id="mainBrainLoadingText">Initializing main AI model...</div>
-                        </div>
+                </div>
+                <div class="panel nn-visualizer-panel" role="region" aria-labelledby="opponent-brain-heading">
+                    <h3 id="opponent-brain-heading">🤖 Opponent AI Brain</h3>
+                    <p>This AI learns independently using its own ontological world model.</p>
+                    <div id="nn-visualization-container-opponent"></div>
+                    <div class="loading-overlay" id="opponentBrainLoadingOverlay" aria-live="assertive" aria-busy="true" aria-label="Loading opponent AI brain">
+                        <div class="loading-spinner"></div>
+                        <div class="loading-text" id="opponentBrainLoadingText">Initializing opponent model...</div>
                     </div>
                 </div>
             </div>
-        </div>
-        <div class="performance-charts-container" role="region" aria-labelledby="performance-heading">
-            <h3 id="performance-heading" style="text-align:center; margin-bottom: 20px;">AI Learning & Performance Metrics</h3>
-            <div class="charts-grid">
-                <div class="chart-container">
-                    <h4>Avg. Q-Value (Confidence)</h4>
-                    <svg id="qValueChart" class="chart-svg" role="img" aria-label="Average Q-Value over time"></svg>
+            <div class="right-column">
+                <div class="panel">
+                    <h3>Concept Knowledge Graph</h3>
+                    <div id="concept-panel"></div>
                 </div>
-                <div class="chart-container">
-                    <h4>Prediction Error (Uncertainty)</h4>
-                    <svg id="predErrorChart" class="chart-svg" role="img" aria-label="Prediction Error over time"></svg>
+                <div class="panel">
+                    <h3>Performance Metrics</h3>
+                    <div class="charts-grid">
+                        <div class="chart-container">
+                            <h4>Avg. State Value</h4>
+                            <svg id="qValueChart" class="chart-svg" role="img" aria-label="Average State Value over time"></svg>
+                        </div>
+                        <div class="chart-container">
+                            <h4>Prediction Error</h4>
+                            <svg id="predErrorChart" class="chart-svg" role="img" aria-label="Prediction Error over time"></svg>
+                        </div>
+                        <div class="chart-container">
+                            <h4>Epsilon</h4>
+                            <svg id="epsilonChart" class="chart-svg" role="img" aria-label="Epsilon exploration rate over time"></svg>
+                        </div>
+                        <div class="chart-container">
+                            <h4>Score Diff (AI-Opp)</h4>
+                            <svg id="scoreChart" class="chart-svg" role="img" aria-label="Score difference between AI and Opponent over time"></svg>
+                        </div>
+                    </div>
                 </div>
-                <div class="chart-container">
-                    <h4>Epsilon (Exploration Rate)</h4>
-                    <svg id="epsilonChart" class="chart-svg" role="img" aria-label="Epsilon exploration rate over time"></svg>
-                </div>
-                <div class="chart-container">
-                    <h4>Score Difference (AI - Opponent)</h4>
-                    <svg id="scoreChart" class="chart-svg" role="img" aria-label="Score difference between AI and Opponent over time"></svg>
+                <div class="panel">
+                    <h3>Advanced Controls</h3>
+                    <div class="controls-section">
+                        <button id="stepButton" aria-label="Advance simulation by one step (S key)">⏭️ Step</button>
+                        <button id="pauseButton" aria-label="Pause the simulation (P key)">⏸️ Pause</button>
+                        <button id="fastForwardButton" aria-label="Toggle fast forward simulation speed (F key)">⏩ Fast FW</button>
+                    </div>
                 </div>
             </div>
-        </div>
-        <div class="controls-section" role="group" aria-label="Simulation Controls">
-             <button id="stepButton" aria-label="Advance simulation by one step (S key)">⏭️ Step</button>
-             <button id="pauseButton" aria-label="Pause the simulation (P key)">⏸️ Pause</button>
-             <button id="fastForwardButton" aria-label="Toggle fast forward simulation speed (F key)">Fast ⏩</button>
-        </div>
-        <div class="log-container" role="log" aria-labelledby="system-console-heading">
-            <h3 id="system-console-heading">🔧 System Console</h3>
-            <div id="log" tabindex="0" aria-live="polite" aria-atomic="true"></div>
+            <div class="log-container" role="log" aria-labelledby="system-console-heading">
+                <h3 id="system-console-heading">🔧 System Console</h3>
+                <div id="log" tabindex="0" aria-live="polite" aria-atomic="true"></div>
+            </div>
         </div>
     </div>
-    <script src="https://unpkg.com/@popperjs/core@2"></script>
-    <script src="https://unpkg.com/tippy.js@6"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script type="module">
+        const dependencies = [
+            { name: 'TensorFlow.js', url: 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.js', check: () => typeof window.tf !== 'undefined', critical: true },
+            { name: 'Three.js', url: 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js', check: () => typeof window.THREE !== 'undefined', critical: true },
+            { name: 'OrbitControls', url: 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js', check: () => typeof window.THREE.OrbitControls !== 'undefined' },
+            { name: 'CSS2DRenderer', url: 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/renderers/CSS2DRenderer.js', check: () => typeof window.THREE.CSS2DRenderer !== 'undefined' },
+            { name: 'Pixi.js', url: 'https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js', check: () => typeof window.PIXI !== 'undefined', critical: true },
+            { name: 'Live2D Core', url: 'https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js', check: () => typeof window.Live2DCubismCore !== 'undefined' },
+            { name: 'Pixi Live2D Display', url: 'https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js', check: () => typeof window.PIXI.live2d !== 'undefined' },
+            { name: 'Popper.js', url: 'https://unpkg.com/@popperjs/core@2', check: () => typeof window.Popper !== 'undefined' },
+            { name: 'Tippy.js', url: 'https://unpkg.com/tippy.js@6', check: () => typeof window.tippy !== 'undefined' }
+        ];
 
-    <!-- Modularized JavaScript -->
-    <script type="module" src="main.js"></script>
+        async function loadScript(url, check) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = url;
+                script.async = true;
+                script.onload = () => {
+                    const poll = () => {
+                        if (check()) {
+                            resolve();
+                        } else {
+                            requestAnimationFrame(poll);
+                        }
+                    };
+                    poll();
+                };
+                script.onerror = () => reject(new Error(`Failed to load script: ${url}`));
+                document.head.appendChild(script);
+            });
+        }
+
+        async function main() {
+            console.log("Bootstrap: Loading dependencies...");
+            try {
+                for (const lib of dependencies) {
+                    console.log(`Loading ${lib.name}...`);
+                    await loadScript(lib.url, lib.check);
+                }
+                console.log("Bootstrap: All dependencies loaded successfully.");
+                console.log("Bootstrap: Initializing application module...");
+                await import('./main.js');
+            } catch (error) {
+                console.error("Bootstrap: A critical error occurred during library loading.", error);
+                document.body.innerHTML = `<div style="color: red; padding: 20px;">
+                    <h1>Initialization Failed</h1>
+                    <p>Could not load a critical library. Please check the console and your internet connection.</p>
+                    <pre>${error.message}</pre>
+                </div>`;
+            }
+        }
+
+        main();
+    </script>
 </body>
 </html>
