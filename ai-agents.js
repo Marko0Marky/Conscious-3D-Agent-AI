@@ -1,11 +1,25 @@
 // --- START OF FILE ai-agents.js ---
-// --- MERGED VERSION: Prioritizing Actor-Critic compatibility from second file, incorporating full learn args from first ---
+// --- FIXED VERSION: Removed ES import, uses global tf for browser CDN ---
 import { OntologicalWorldModel } from './owm.js';
 import { clamp, vecZeros, isFiniteVector, logger, norm2 } from './utils.js';
 
+// Use global tf from CDN (no import needed). Add a check for its existence.
+const tf = window.tf || (typeof tf !== 'undefined' ? tf : null);
+if (!tf) {
+    logger.error('TensorFlow.js not loaded globally. Check CDN script in HTML.');
+} else {
+    // Initialize WebGL backend for TensorFlow.js
+    tf.setBackend('webgl').then(() => {
+        logger.info('TensorFlow.js WebGL backend initialized.');
+    }).catch(e => {
+        logger.warn('Failed to set WebGL backend, falling back to CPU.', e);
+        tf.setBackend('cpu');
+    });
+}
+
 /**
  * Implements a Reinforcement Learning agent using an Ontological World Model.
- * Manages exploration-exploitation balance (epsilon-greedy) and state representation.
+ * Manages exploration-exploitation balance with softmax policy and state representation.
  */
 export class LearningAI {
     /**
@@ -25,15 +39,16 @@ export class LearningAI {
         this.epsilonMin = 0.05;
         this.epsilonDecay = 0.9995;
         this.learningRate = 0.01;
+        this.temperature = 1.0; // Softmax temperature for exploration
         
         this.lastStateVec = vecZeros(this.worldModel.stateDim);
         this.lastActionIndex = 3; // Corresponds to 'IDLE'
         this.lastActivations = [];
-        this.avgStateValue = 0; // Renamed from avgQValue to avgStateValue for Critic
+        this.avgStateValue = 0;
     }
 
     /**
-     * Creates a normalized state vector from the current 3D game state, now including raycast data.
+     * Creates a normalized state vector from the current 3D game state, including raycast data.
      * @param {Object} gameState - The raw game state object.
      * @returns {Float32Array} The normalized state vector.
      */
@@ -86,8 +101,20 @@ export class LearningAI {
     }
 
     /**
-     * Makes a decision for the AI action based on epsilon-greedy policy.
-     * This now uses the Actor's policy (action probabilities) and the Critic's state value.
+     * Computes softmax probabilities for exploration.
+     * @param {Float32Array} actionProbs - Raw action probabilities from the model.
+     * @returns {Float32Array} Softmax probabilities.
+     */
+    softmax(actionProbs) {
+        if (!isFiniteVector(actionProbs)) return vecZeros(actionProbs.length);
+        const maxProb = Math.max(...actionProbs);
+        const exps = actionProbs.map(p => Math.exp((p - maxProb) / this.temperature));
+        const sumExps = exps.reduce((a, b) => a + b, 0);
+        return new Float32Array(exps.map(e => e / sumExps));
+    }
+
+    /**
+     * Makes a decision for the AI action using softmax-based exploration.
      * @param {Object} gameState - The current game state.
      * @returns {Promise<{action: number[], activations: Float32Array[], corrupted: boolean, chosenActionIndex: number}>}
      */
@@ -118,15 +145,22 @@ export class LearningAI {
             return this.actionQueue.shift() || decision;
         }
 
-        this.avgStateValue = Number.isFinite(stateValue) ? stateValue : 0; // Update average state value for display
+        this.avgStateValue = Number.isFinite(stateValue) ? stateValue : 0;
 
-        // Epsilon-greedy exploration on top of Actor's policy
+        // Softmax-based exploration
         if (Math.random() < this.epsilon) {
-            actionIndex = Math.floor(Math.random() * actions.length);
+            const softmaxProbs = this.softmax(actionProbs);
+            let rand = Math.random();
+            let cumulative = 0;
+            for (let i = 0; i < softmaxProbs.length; i++) {
+                cumulative += softmaxProbs[i];
+                if (rand <= cumulative) {
+                    actionIndex = i;
+                    break;
+                }
+            }
         } else {
-            // Choose action based on actor's probability distribution
             if (actionProbs && isFiniteVector(actionProbs)) {
-                // Simple argmax for greedy choice, but can also sample from distribution
                 actionIndex = actionProbs.indexOf(Math.max(...actionProbs));
             } else {
                 logger.warn(`LearningAI (${this.isPlayerTwo ? 'AI' : 'Opponent'}): Received invalid action probabilities, defaulting to IDLE.`);
@@ -151,18 +185,15 @@ export class LearningAI {
      * @returns {Promise<void>}
      */
     async learn(preGameState, actionIndex, reward, newGameState, isDone) {
-        // Ensure state vectors are created if preGameState provided (compatibility with first file)
         if (preGameState) {
             this.lastStateVec = this.createStateVector(preGameState);
         }
         const nextStateVec = this.createStateVector(newGameState);
 
-        // Add intrinsic motivation
         const curiosityBonus = clamp(this.worldModel.predictionError, 0, 1) * 0.01;
         let totalReward = reward + curiosityBonus;
 
-        // Add idle penalty
-        if (actionIndex === 3) { // 3 is the index for IDLE
+        if (actionIndex === 3) {
             totalReward -= 0.01;
         }
         
@@ -170,6 +201,7 @@ export class LearningAI {
         
         if (this.epsilon > this.epsilonMin) {
             this.epsilon *= this.epsilonDecay;
+            this.temperature = clamp(this.temperature * 0.999, 0.5, 2.0); // Decay temperature
         }
 
         const uncertaintyFactor = 1 + clamp(this.worldModel.predictionError, 0, 5) * 0.05;
@@ -183,6 +215,7 @@ export class LearningAI {
     reset() {
         this.worldModel.resetRecurrentState();
         this.epsilon = 1.0;
+        this.temperature = 1.0;
         this.avgStateValue = 0;
         this.actionQueue = [];
         this.learningRate = 0.01;
@@ -192,12 +225,8 @@ export class LearningAI {
 
 /**
  * Monitors a LearningAI's performance and internal metrics to adapt its learning rate and exploration.
- * This acts as a meta-learning agent.
  */
 export class StrategicAI {
-    /**
-     * @param {LearningAI} learningAI - The learning AI to manage.
-     */
     constructor(learningAI) {
         this.learningAI = learningAI;
         this.rewardHistory = [];
@@ -206,10 +235,6 @@ export class StrategicAI {
         this.learningRateModulationRate = 0.005;
     }
 
-    /**
-     * Observes the reward received by the learning AI.
-     * @param {number} reward - The reward received.
-     */
     observe(reward) {
         if (Number.isFinite(reward)) {
             this.rewardHistory.push(reward);
@@ -219,10 +244,6 @@ export class StrategicAI {
         }
     }
 
-    /**
-     * Modulates the `epsilon` and `learningRate` of the associated `LearningAI`
-     * based on performance and internal consciousness metrics.
-     */
     modulateParameters() {
         if (this.rewardHistory.length < this.HISTORY_SIZE / 2) return;
 
