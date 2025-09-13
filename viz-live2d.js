@@ -6,6 +6,7 @@ let live2dModel;
 let container;
 let initialized = false;
 let clock;
+let sheafInstance = null; // Reference to the sheaf for Phi
 
 // FIX: EMOTION_MAP now uses indices 0-5 to match the incoming 6-element emotion vector.
 const EMOTION_MAP = {
@@ -23,7 +24,7 @@ const HEAD_MOVEMENT_MAP = {
     'idle': { param: 'ParamAngleY', value: 0 }
 };
 
-export async function initLive2D(mainClock) {
+export async function initLive2D(mainClock, sheaf) { // Added sheaf parameter
     if (initialized) return true;
     if (typeof PIXI === 'undefined' || typeof PIXI.live2d === 'undefined') {
         logger.error('PIXI.js or PIXI.live2d library not found.');
@@ -35,6 +36,7 @@ export async function initLive2D(mainClock) {
         return false;
     }
     clock = mainClock;
+    sheafInstance = sheaf; // Store sheaf instance
 
     try {
         pixiApp = new PIXI.Application({
@@ -111,10 +113,15 @@ export function updateLive2DEmotions(emotionTensor, hmLabel = 'idle') {
 }
 
 export function updateLive2D(deltaTime) {
-    if (!initialized || !live2dModel) return;
+    if (!initialized || !live2dModel || !sheafInstance) return;
     // The PIXI.Application ticker handles rendering. We just update params.
-    const breath = (Math.sin(Date.now() / 1000) + 1) / 2;
-    live2dModel.internalModel.coreModel.setParameterValueById('ParamBreath', breath);
+    
+    // Link breath to Phi
+    const phiNormalized = clamp((sheafInstance.phi || 0.01) / 5.0, 0, 1); // Normalize Phi (e.g., max 5.0)
+    const breath = (Math.sin(Date.now() / 1000) + 1) / 2; // Basic breath cycle
+    const phiDrivenBreath = clamp(0.5 + breath * phiNormalized * 0.5, 0.2, 0.9); // Phi influences breath intensity/range
+
+    live2dModel.internalModel.coreModel.setParameterValueById('ParamBreath', phiDrivenBreath);
 }
 
 export function cleanupLive2D() {
@@ -126,6 +133,7 @@ export function cleanupLive2D() {
     live2dModel = null;
     initialized = false;
     clock = null;
+    sheafInstance = null; // Clear sheaf reference
     logger.info('Live2D resources cleaned up.');
 }
 
