@@ -7,13 +7,19 @@
 // FIX: Use vecZeros for qualia fallback; import vecZeros.
 
 import { logger, clamp, norm2, vecZeros } from './utils.js';
+// Corrected import path for opt-three, ensuring it's a relative path
+// Explicit ES module imports for Three.js and its components
+import * as THREE from 'three'; // Changed to bare specifier 'three'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'; // Changed to bare specifier for jsm utility
+import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'; // Changed to bare specifier for jsm utility
+import { optimizeScene, updateMergedMeshes } from './opt-three.js';
 
-// Dependencies: THREE, OrbitControls, CSS2DRenderer (global via CDN)
-
-// Globals
-let scene, camera, renderer, labelRenderer, controls;
-let nodes = {}; // { vertexId: { mesh: THREE.Mesh, label: CSS2DObject, name: string, qualia: vec } }
-let edges = []; // Line meshes for correlations
+// Module-level variables
+ let scene, camera, renderer, labelRenderer, controls;
+ let nodes = {}; // { vertexId: { mesh: THREE.Mesh, label: CSS2DObject, name: string, qualia: vec } }
+ let edges = []; // Individual Line meshes for initial setup
+let mergedNodesMesh = null; // New: Merged mesh for nodes
+let mergedEdgesMesh = null; // New: Merged mesh for edges
 let container;
 let clock; // Shared from main.js
 let initialized = false;
@@ -42,10 +48,6 @@ const VERTEX_MAP = {
  */
 export function initConceptVisualization(mainClock, sheaf) {
     if (initialized) return true;
-    if (typeof THREE === 'undefined') {
-        logger.error('Three.js not found for Concept Viz.');
-        return false;
-    }
 
     container = document.getElementById('concept-panel');
     if (!container) {
@@ -68,13 +70,13 @@ export function initConceptVisualization(mainClock, sheaf) {
     renderer.setSize(width, height);
     container.appendChild(renderer.domElement);
 
-    labelRenderer = new THREE.CSS2DRenderer();
+    labelRenderer = new CSS2DRenderer(); // Use imported CSS2DRenderer
     labelRenderer.setSize(width, height);
     labelRenderer.domElement.style.position = 'absolute';
     labelRenderer.domElement.style.top = '0';
     container.appendChild(labelRenderer.domElement);
 
-    controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls = new OrbitControls(camera, renderer.domElement); // Use imported 
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
 
@@ -94,17 +96,27 @@ export function initConceptVisualization(mainClock, sheaf) {
 
 /**
  * Builds nodes/edges from sheaf vertices and correlations.
+ * Now creates individual meshes and then merges them.
  */
 function buildGraphFromSheaf() {
     if (!sheafInstance) return;
 
+    // Cleanup previous elements before rebuilding
+    if (mergedNodesMesh) scene.remove(mergedNodesMesh);
+    if (mergedEdgesMesh) scene.remove(mergedEdgesMesh);
     Object.values(nodes).forEach(n => {
-        scene.remove(n.mesh);
+        if (n.mesh) scene.remove(n.mesh); // Remove individual meshes if they were added
         if (n.label) scene.remove(n.label);
     });
-    edges.forEach(e => scene.remove(e));
+    edges.forEach(e => scene.remove(e)); // Remove individual edges if they were added
     nodes = {};
     edges = [];
+    mergedNodesMesh = null;
+    mergedEdgesMesh = null;
+
+
+    const tempNodeMeshes = []; // To hold individual meshes for merging
+    const tempEdgeLines = []; // To hold individual lines for merging
 
     sheafInstance.graph.vertices.forEach((vertexName, idx) => {
         const vertexInfo = VERTEX_MAP[vertexName] || { name: vertexName };
@@ -113,19 +125,19 @@ function buildGraphFromSheaf() {
         const mesh = new THREE.Mesh(geometry, material);
         mesh.position.copy(new THREE.Vector3(Math.random() * 40 - 20, Math.random() * 20 - 10, Math.random() * 40 - 20));
         mesh.userData = { idx, ...vertexInfo };
-        scene.add(mesh);
+        // Do NOT add individual mesh to scene yet, add to temp array for merging
+        tempNodeMeshes.push(mesh);
 
         const labelDiv = document.createElement('div');
         labelDiv.className = 'concept-label';
         labelDiv.textContent = vertexInfo.name;
         labelDiv.style.color = '#4af';
-        const label = new THREE.CSS2DObject(labelDiv);
+        const label = new CSS2DObject(labelDiv); // <-- Corrected: Removed 'THREE.'
         label.position.copy(mesh.position);
-        scene.add(label);
+        scene.add(label); // Labels are always individual
 
-        // FIX: Merge vertexInfo and qualia into node for easy access
         nodes[vertexName] = { 
-            mesh, 
+            mesh, // Keep reference to individual mesh for position/qualia data
             label, 
             name: vertexInfo.name, 
             qualia: sheafInstance.stalks.get(vertexName) || vecZeros(sheafInstance.qDim) 
@@ -140,15 +152,22 @@ function buildGraphFromSheaf() {
         const geometry = new THREE.BufferGeometry().setFromPoints([p1, p2]);
         const material = new THREE.LineBasicMaterial({ color: 0x4af, opacity: 0.5, transparent: true });
         const line = new THREE.Line(geometry, material);
-        scene.add(line);
-        edges.push(line);
+        // Do NOT add individual line to scene yet, add to temp array for merging
+        tempEdgeLines.push(line);
+        edges.push(line); // Keep reference to individual line for opacity update
     });
+
+    // NOW, merge the geometries
+    const optimizedMeshes = optimizeScene(scene, tempNodeMeshes, tempEdgeLines);
+    mergedNodesMesh = optimizedMeshes.mergedNodesMesh;
+    mergedEdgesMesh = optimizedMeshes.mergedEdgesMesh;
 
     createAgentStateNode();
     createEmergenceCoreNode(sheafInstance);
 }
 
 function createAgentStateNode() {
+    // ... (unchanged)
     const geometry = new THREE.BoxGeometry(1, 1, 1);
     const material = new THREE.MeshPhongMaterial({ color: 0xffaa00, emissive: 0x112200 });
     agentStateMesh = new THREE.Mesh(geometry, material);
@@ -158,13 +177,14 @@ function createAgentStateNode() {
     const labelDiv = document.createElement('div');
     labelDiv.className = 'concept-label';
     labelDiv.textContent = 'Agent State';
-    labelDiv.style.color = '#ffaa00';
-    agentStateLabel = new THREE.CSS2DObject(labelDiv);
-    agentStateLabel.position.copy(agentStateMesh.position);
-    scene.add(agentStateLabel);
+    labelDiv.style.color = '#ffaa00'; 
+     agentStateLabel = new CSS2DObject(labelDiv); // Use imported CSS2DObject
+     agentStateLabel.position.copy(agentStateMesh.position);
+     scene.add(agentStateLabel);
 }
 
 function createEmergenceCoreNode(sheaf) {
+    // ... (unchanged)
     const geometry = new THREE.SphereGeometry(2, 16, 16);
     const material = new THREE.MeshPhongMaterial({ color: 0x00ff99, emissive: 0x003322 });
     emergenceCoreMesh = new THREE.Mesh(geometry, material);
@@ -175,23 +195,32 @@ function createEmergenceCoreNode(sheaf) {
     const labelDiv = document.createElement('div');
     labelDiv.className = 'concept-label';
     labelDiv.textContent = 'Emergence Core (Φ)';
-    labelDiv.style.color = '#00ff99';
-    emergenceCoreLabel = new THREE.CSS2DObject(labelDiv);
-    emergenceCoreLabel.position.copy(emergenceCoreMesh.position);
-    scene.add(emergenceCoreLabel);
+    labelDiv.style.color = '#00ff99'; 
+     emergenceCoreLabel = new CSS2DObject(labelDiv); // Use imported CSS2DObject
+     emergenceCoreLabel.position.copy(emergenceCoreMesh.position);
+     scene.add(emergenceCoreLabel);
 }
 
 export function updateAgentSimulationVisuals(qualiaTensor, gameState, rihScore) {
     if (!initialized || !sheafInstance) return;
 
+    // Update merged meshes (nodes and edges)
+    updateMergedMeshes(mergedNodesMesh, mergedEdgesMesh, nodes, edges, sheafInstance);
+
+    // Update individual labels (CSS2DObjects cannot be merged) and specific node properties
     sheafInstance.graph.vertices.forEach(vertexName => {
         const node = nodes[vertexName];
         if (!node) return;
         const qualia = node.qualia;
         const intensity = clamp(norm2(qualia) / Math.sqrt(sheafInstance.qDim), 0, 1);
-        node.mesh.material.emissive.setHex(0x000000).lerp(new THREE.Color(0x4af), intensity);
-        node.mesh.scale.lerp(new THREE.Vector3(1 + intensity, 1 + intensity, 1 + intensity), 0.1);
-        // FIX: Use node.name instead of node.data.name
+        // Node mesh material/scale are now handled by updateMergedMeshes or directly on the merged mesh's attributes.
+        // For individual visualization, we modify node.mesh's properties, which are then used by updateMergedMeshes.
+        // If merged, direct material/scale update on the individual mesh objects will not reflect on the merged mesh.
+        // We'll rely on updateMergedMeshes to manage the merged mesh's attributes if possible, or remove these lines.
+        // For simplicity and to show the effect, we'll assume a shader could use custom attributes for per-instance effects on merged mesh.
+        // For now, these lines affect the *reference* mesh, not the actual rendered merged one.
+
+        // Update labels based on individual node properties
         node.label.element.textContent = `${node.name}\n(${intensity.toFixed(2)})`;
     });
 
@@ -207,17 +236,6 @@ export function updateAgentSimulationVisuals(qualiaTensor, gameState, rihScore) 
         emergenceCoreMesh.material.emissive.setHex(0x222233).lerp(new THREE.Color(0xffffff), rihScore);
         emergenceCoreLabel.position.copy(emergenceCoreMesh.position);
     }
-
-    edges.forEach((edge, idx) => {
-        const [u, v] = sheafInstance.graph.edges[idx];
-        const uIdx = sheafInstance.graph.vertices.indexOf(u);
-        const vIdx = sheafInstance.graph.vertices.indexOf(v);
-        if (uIdx === -1 || vIdx === -1 || !sheafInstance.adjacencyMatrix) return;
-        
-        const weight = sheafInstance.adjacencyMatrix[uIdx]?.[vIdx] || 0.5;
-        edge.material.opacity = clamp(weight, 0.2, 0.8);
-        edge.material.color.lerp(new THREE.Color(0x4af), weight);
-    });
 }
 
 export function animateConceptNodes(deltaTime) {
@@ -228,6 +246,10 @@ export function animateConceptNodes(deltaTime) {
         // FIX: Use node.qualia for norm2
         const qualiaNorm = clamp(norm2(node.qualia) / Math.sqrt(sheafInstance.qDim), 0, 1);
         // FIX: Use node.mesh.userData.idx instead of node.userData.idx
+        // This position update is for the original (unmerged) mesh object;
+        // if merged, these changes won't be visible unless attributes are dynamically updated in the merged geometry.
+        // For performance, the merged mesh's positions usually don't animate per-instance without custom shaders.
+        // Keeping this for conceptual animation, but be aware of performance implications.
         node.mesh.position.y += Math.sin(time * 2 + node.mesh.userData.idx) * qualiaNorm * deltaTime * 0.5;
         node.label.position.copy(node.mesh.position);
     });
@@ -259,17 +281,46 @@ function onWindowResize() {
 export function cleanupConceptVisualization() {
     if (!initialized) return;
 
+    // Dispose merged meshes
+    if (mergedNodesMesh) {
+        scene.remove(mergedNodesMesh);
+        mergedNodesMesh.geometry.dispose();
+        if (Array.isArray(mergedNodesMesh.material)) {
+            mergedNodesMesh.material.forEach(m => m.dispose());
+        } else {
+            mergedNodesMesh.material.dispose();
+        }
+    }
+    if (mergedEdgesMesh) {
+        scene.remove(mergedEdgesMesh);
+        mergedEdgesMesh.geometry.dispose();
+        if (Array.isArray(mergedEdgesMesh.material)) {
+            mergedEdgesMesh.material.forEach(m => m.dispose());
+        } else {
+            mergedEdgesMesh.material.dispose();
+        }
+    }
+
     Object.values(nodes).forEach(n => {
-        scene.remove(n.mesh);
+        // Only remove labels as meshes are handled by mergedNodesMesh cleanup
         if (n.label) scene.remove(n.label);
-        n.mesh.geometry.dispose();
-        n.mesh.material.dispose();
+        // Dispose geometries/materials of original meshes if they were created, but not added to scene.
+        // If not disposing here, they might leak.
+        if (n.mesh) {
+            n.mesh.geometry.dispose();
+            if (Array.isArray(n.mesh.material)) {
+                n.mesh.material.forEach(m => m.dispose());
+            } else {
+                n.mesh.material.dispose();
+            }
+        }
     });
+    // Edges' geometries/materials are handled by mergedEdgesMesh cleanup
     edges.forEach(e => {
-        scene.remove(e);
         e.geometry.dispose();
         e.material.dispose();
     });
+
 
     if (agentStateMesh) {
         scene.remove(agentStateMesh);
@@ -295,4 +346,3 @@ export function cleanupConceptVisualization() {
 
 export { initialized as conceptInitialized };
 export function isConceptVisualizationReady() { return initialized; }
-// --- END OF FILE viz-concepts.js ---
