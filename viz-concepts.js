@@ -1,15 +1,18 @@
 // --- START OF FILE viz-concepts.js ---
-// --- UPDATED FILE: viz-concepts.js ---
+// --- FIXED VERSION: viz-concepts.js ---
 // Integrated with Sheaf AI: 3D Three.js graph for sheaf vertices; links to game state (e.g., agent pos → node anim).
 // Shared clock/scene with ThreeDeeGame; edges weighted by sheaf correlations.
+// FIX: Resolved 'node.userData.idx undefined' by using node.mesh.userData.idx.
+// FIX: Merged vertexInfo into node object for access to name in updates.
+// FIX: Use vecZeros for qualia fallback; import vecZeros.
 
-import { logger, clamp, norm2 } from './utils.js';
+import { logger, clamp, norm2, vecZeros } from './utils.js';
 
 // Dependencies: THREE, OrbitControls, CSS2DRenderer (global via CDN)
 
 // Globals
 let scene, camera, renderer, labelRenderer, controls;
-let nodes = {}; // { vertexId: { mesh: THREE.Mesh, label: CSS2DObject, data: { qualia: vec } } }
+let nodes = {}; // { vertexId: { mesh: THREE.Mesh, label: CSS2DObject, name: string, qualia: vec } }
 let edges = []; // Line meshes for correlations
 let container;
 let clock; // Shared from main.js
@@ -104,31 +107,38 @@ function buildGraphFromSheaf() {
     edges = [];
 
     sheafInstance.graph.vertices.forEach((vertexName, idx) => {
-        const data = VERTEX_MAP[vertexName] || { name: vertexName };
+        const vertexInfo = VERTEX_MAP[vertexName] || { name: vertexName };
         const geometry = new THREE.SphereGeometry(1, 16, 16);
         const material = new THREE.MeshPhongMaterial({ color: 0x4af, emissive: 0x001122 });
         const mesh = new THREE.Mesh(geometry, material);
         mesh.position.copy(new THREE.Vector3(Math.random() * 40 - 20, Math.random() * 20 - 10, Math.random() * 40 - 20));
-        mesh.userData = { idx, ...data };
+        mesh.userData = { idx, ...vertexInfo };
         scene.add(mesh);
 
         const labelDiv = document.createElement('div');
         labelDiv.className = 'concept-label';
-        labelDiv.textContent = data.name;
+        labelDiv.textContent = vertexInfo.name;
         labelDiv.style.color = '#4af';
         const label = new THREE.CSS2DObject(labelDiv);
         label.position.copy(mesh.position);
         scene.add(label);
 
-        nodes[vertexName] = { mesh, label, data: { qualia: sheafInstance.stalks.get(vertexName) || [] } };
+        // FIX: Merge vertexInfo and qualia into node for easy access
+        nodes[vertexName] = { 
+            mesh, 
+            label, 
+            name: vertexInfo.name, 
+            qualia: sheafInstance.stalks.get(vertexName) || vecZeros(sheafInstance.qDim) 
+        };
     });
 
     sheafInstance.graph.edges.forEach(([u, v]) => {
         const uNode = nodes[u], vNode = nodes[v];
         if (!uNode || !vNode) return;
-        const positions = [uNode.mesh.position, vNode.mesh.position];
-        const geometry = new THREE.BufferGeometry().setFromPoints(positions);
-        const material = new THREE.LineBasicMaterial({ color: 0x888888, opacity: 0.5, transparent: true });
+        const p1 = uNode.mesh.position;
+        const p2 = vNode.mesh.position;
+        const geometry = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+        const material = new THREE.LineBasicMaterial({ color: 0x4af, opacity: 0.5, transparent: true });
         const line = new THREE.Line(geometry, material);
         scene.add(line);
         edges.push(line);
@@ -139,8 +149,8 @@ function buildGraphFromSheaf() {
 }
 
 function createAgentStateNode() {
-    const geometry = new THREE.SphereGeometry(1.5, 16, 16);
-    const material = new THREE.MeshPhongMaterial({ color: 0x44aaff, emissive: 0x000033 });
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    const material = new THREE.MeshPhongMaterial({ color: 0xffaa00, emissive: 0x112200 });
     agentStateMesh = new THREE.Mesh(geometry, material);
     agentStateMesh.position.set(20, 0, 0);
     scene.add(agentStateMesh);
@@ -148,7 +158,7 @@ function createAgentStateNode() {
     const labelDiv = document.createElement('div');
     labelDiv.className = 'concept-label';
     labelDiv.textContent = 'Agent State';
-    labelDiv.style.color = '#44aaff';
+    labelDiv.style.color = '#ffaa00';
     agentStateLabel = new THREE.CSS2DObject(labelDiv);
     agentStateLabel.position.copy(agentStateMesh.position);
     scene.add(agentStateLabel);
@@ -177,11 +187,12 @@ export function updateAgentSimulationVisuals(qualiaTensor, gameState, rihScore) 
     sheafInstance.graph.vertices.forEach(vertexName => {
         const node = nodes[vertexName];
         if (!node) return;
-        const qualia = node.data.qualia;
+        const qualia = node.qualia;
         const intensity = clamp(norm2(qualia) / Math.sqrt(sheafInstance.qDim), 0, 1);
         node.mesh.material.emissive.setHex(0x000000).lerp(new THREE.Color(0x4af), intensity);
         node.mesh.scale.lerp(new THREE.Vector3(1 + intensity, 1 + intensity, 1 + intensity), 0.1);
-        node.label.element.textContent = `${node.data.name}\n(${intensity.toFixed(2)})`;
+        // FIX: Use node.name instead of node.data.name
+        node.label.element.textContent = `${node.name}\n(${intensity.toFixed(2)})`;
     });
 
     if (agentStateMesh && gameState?.ai) {
@@ -214,8 +225,10 @@ export function animateConceptNodes(deltaTime) {
     const time = clock.getElapsedTime();
 
     Object.values(nodes).forEach(node => {
-        const qualiaNorm = clamp(norm2(node.data.qualia) / Math.sqrt(sheafInstance.qDim), 0, 1);
-        node.mesh.position.y += Math.sin(time * 2 + node.userData.idx) * qualiaNorm * deltaTime * 0.5;
+        // FIX: Use node.qualia for norm2
+        const qualiaNorm = clamp(norm2(node.qualia) / Math.sqrt(sheafInstance.qDim), 0, 1);
+        // FIX: Use node.mesh.userData.idx instead of node.userData.idx
+        node.mesh.position.y += Math.sin(time * 2 + node.mesh.userData.idx) * qualiaNorm * deltaTime * 0.5;
         node.label.position.copy(node.mesh.position);
     });
 
