@@ -1,97 +1,143 @@
-// --- START OF FILE opt-three.js ---
-// --- NEW FILE: Three.js optimizations for viz-concepts.js ---
-import * as THREE from 'three';
-import { BufferGeometryUtils } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { logger } from './utils.js';
-
+ // --- START OF FILE opt-three.js ---
+ // --- NEW FILE: Three.js optimizations for viz-concepts.js ---
+import * as THREE from 'three'; // Changed to bare specifier 'three'
+import { BufferGeometryUtils } from 'three/examples/jsm/utils/BufferGeometryUtils.js'; // Changed to bare specifier for jsm utility
+ import { logger, clamp, norm2 } from './utils.js'; // Also import clamp and norm2 for dynamic updates
 /**
- * Optimizes Three.js scene for reduced draw calls and better performance.
- * @param {THREE.Scene} scene - The scene to optimize.
- * @param {Object} nodes - Node dictionary from viz-concepts.js.
- * @param {Array} edges - Edge array from viz-concepts.js.
- * @returns {Object} Optimized { mergedNodesMesh, mergedEdgesMesh }
+ * Optimizes Three.js scene elements by merging node and edge geometries.
+ * This function is intended to be called during graph initialization in viz-concepts.js.
+ * @param {THREE.Scene} scene - The Three.js scene.
+ * @param {THREE.Mesh[]} individualNodeMeshes - Array of individual node meshes.
+ * @param {THREE.Line[]} individualEdgeLines - Array of individual edge lines.
+ * @returns {{mergedNodesMesh: THREE.Mesh|null, mergedEdgesMesh: THREE.LineSegments|null}} Optimized meshes.
  */
-export function optimizeScene(scene, nodes, edges) {
+export function optimizeScene(scene, individualNodeMeshes, individualEdgeLines) {
+    let mergedNodesMesh = null;
+    let mergedEdgesMesh = null;
+
     // Merge node geometries
-    const nodeGeometries = [];
-    const nodePositions = [];
-    Object.values(nodes).forEach(node => {
-        const geom = node.mesh.geometry.clone();
-        geom.applyMatrix4(node.mesh.matrixWorld);
-        nodeGeometries.push(geom);
-        nodePositions.push(node.mesh.position.clone());
-        scene.remove(node.mesh); // Remove individual meshes
-    });
+    if (individualNodeMeshes.length > 0) {
+        const nodeGeometries = [];
+        const nodePositions = []; // Store original positions to restore labels
+        
+        individualNodeMeshes.forEach(mesh => {
+            if (mesh && mesh.geometry) {
+                mesh.updateMatrixWorld(true); // Ensure world matrix is updated for correct merging
+                const geom = mesh.geometry.clone();
+                geom.applyMatrix4(mesh.matrixWorld);
+                nodeGeometries.push(geom);
+                nodePositions.push(mesh.position.clone());
+                // No need to remove from scene here, viz-concepts.js will manage
+            }
+        });
 
-    if (nodeGeometries.length === 0) {
-        logger.warn('No node geometries to merge.');
-        return { mergedNodesMesh: null, mergedEdgesMesh: null };
+        if (nodeGeometries.length > 0) {
+            const mergedGeometry = BufferGeometryUtils.mergeBufferGeometries(nodeGeometries);
+            const nodeMaterial = new THREE.MeshPhongMaterial({ color: 0x44aaff, emissive: 0x001122 });
+            mergedNodesMesh = new THREE.Mesh(mergedGeometry, nodeMaterial);
+            mergedNodesMesh.name = 'mergedConceptNodes';
+            scene.add(mergedNodesMesh);
+            logger.info(`Merged ${nodeGeometries.length} node geometries into one mesh.`);
+        } else {
+            logger.warn('No valid node geometries to merge.');
+        }
     }
-
-    const mergedNodeGeometry = BufferGeometryUtils.mergeBufferGeometries(nodeGeometries);
-    const nodeMaterial = new THREE.MeshPhongMaterial({ color: 0x44aaff, emissive: 0x001122 });
-    const mergedNodesMesh = new THREE.Mesh(mergedNodeGeometry, nodeMaterial);
-    scene.add(mergedNodesMesh);
 
     // Merge edge geometries
-    const edgeGeometries = [];
-    edges.forEach(edge => {
-        const geom = edge.geometry.clone();
-        edgeGeometries.push(geom);
-        scene.remove(edge);
-    });
+    if (individualEdgeLines.length > 0) {
+        const edgeGeometries = [];
+        individualEdgeLines.forEach(line => {
+            if (line && line.geometry) {
+                line.updateMatrixWorld(true); // Ensure world matrix is updated
+                const geom = line.geometry.clone();
+                geom.applyMatrix4(line.matrixWorld);
+                edgeGeometries.push(geom);
+                // No need to remove from scene here
+            }
+        });
 
-    const mergedEdgeGeometry = edgeGeometries.length > 0 ? BufferGeometryUtils.mergeBufferGeometries(edgeGeometries) : null;
-    let mergedEdgesMesh = null;
-    if (mergedEdgeGeometry) {
-        const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x44aaff, opacity: 0.5, transparent: true });
-        mergedEdgesMesh = new THREE.LineSegments(mergedEdgeGeometry, edgeMaterial);
-        scene.add(mergedEdgesMesh);
+        if (edgeGeometries.length > 0) {
+            const mergedGeometry = BufferGeometryUtils.mergeBufferGeometries(edgeGeometries);
+            // Note: LineBasicMaterial's opacity can be tricky with merged geometries.
+            // For now, we use a single material. If per-edge opacity is needed,
+            // a custom shader or breaking up merging would be required.
+            const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x44aaff, opacity: 0.5, transparent: true });
+            mergedEdgesMesh = new THREE.LineSegments(mergedGeometry, edgeMaterial);
+            mergedEdgesMesh.name = 'mergedConceptEdges';
+            scene.add(mergedEdgesMesh);
+            logger.info(`Merged ${edgeGeometries.length} edge geometries into one line segment mesh.`);
+        } else {
+            logger.warn('No valid edge geometries to merge.');
+        }
     }
 
-    // Reattach labels to track merged node positions
-    Object.values(nodes).forEach((node, i) => {
-        if (node.label) {
-            node.label.position.copy(nodePositions[i]);
-            scene.add(node.label);
-        }
-    });
+    // Dispose of original geometries to free up memory after merging
+    individualNodeMeshes.forEach(mesh => mesh.geometry.dispose());
+    individualEdgeLines.forEach(line => line.geometry.dispose());
 
-    logger.info('Scene optimized: Merged nodes and edges for reduced draw calls.');
     return { mergedNodesMesh, mergedEdgesMesh };
 }
 
 /**
- * Updates merged meshes with dynamic properties (e.g., qualia-driven scaling).
- * @param {THREE.Mesh} mergedNodesMesh - Merged nodes mesh.
- * @param {THREE.LineSegments} mergedEdgesMesh - Merged edges mesh.
- * @param {Object} nodes - Node dictionary.
- * @param {Array} edges - Original edge array.
- * @param {Object} sheafInstance - Sheaf instance for weights.
+ * Updates dynamic properties of merged meshes (e.g., node colors/scales, edge opacities).
+ * This function should be called in the animation loop.
+ * NOTE: For per-instance dynamic properties on a merged mesh without re-merging,
+ * custom shaders with attributes for color, scale, etc., would be necessary.
+ * For simplicity, this current implementation primarily focuses on the merged mesh's
+ * overall material properties. To truly animate individual nodes of a merged mesh,
+ * a custom shader setup is required. The current `viz-concepts.js` animates individual
+ * node.mesh positions (which won't affect the merged mesh's vertices directly without more work).
+ * @param {THREE.Mesh} mergedNodesMesh - The merged nodes mesh.
+ * @param {THREE.LineSegments} mergedEdgesMesh - The merged edges mesh.
+ * @param {Object} nodes - The node dictionary from viz-concepts.js (contains original meshes & qualia).
+ * @param {Array} edges - The original edge array from viz-concepts.js (contains original lines).
+ * @param {Object} sheafInstance - The EnhancedQualiaSheaf instance for weights and qualia.
  */
 export function updateMergedMeshes(mergedNodesMesh, mergedEdgesMesh, nodes, edges, sheafInstance) {
-    if (!mergedNodesMesh || !sheafInstance) return;
+    if (!sheafInstance) return;
 
-    // Update node scales based on qualia
-    const scales = new Float32Array(mergedNodesMesh.geometry.attributes.position.count / 3);
-    Object.values(nodes).forEach((node, i) => {
-        const qualiaNorm = clamp(norm2(node.qualia) / Math.sqrt(sheafInstance.qDim), 0, 1);
-        scales[i] = 1 + qualiaNorm;
+    // --- Dynamic Node Properties (Conceptual): Requires custom shader for per-instance effects ---
+    // If you want individual nodes within the *mergedNodesMesh* to pulse/change color based on qualia,
+    // you would need to implement a custom shader that uses attributes (e.g., `aQualiaIntensity`, `aQualiaHue`)
+    // that are updated here and passed to the shader.
+    // For now, we'll keep the conceptual update in viz-concepts.js for individual `node.mesh` which isn't directly rendered.
+    // A simple, visible effect on the *merged* mesh would be an overall emissive color change based on average qualia activity.
+
+    let totalQualiaNorm = 0;
+    let nodeCount = 0;
+    Object.values(nodes).forEach(node => {
+        const qualia = node.qualia;
+        if (qualia && qualia.length > 0) {
+            totalQualiaNorm += norm2(qualia);
+            nodeCount++;
+        }
     });
-    mergedNodesMesh.geometry.setAttribute('scale', new THREE.BufferAttribute(scales, 1));
-    mergedNodesMesh.geometry.attributes.scale.needsUpdate = true;
+    const avgQualiaIntensity = nodeCount > 0 ? clamp(totalQualiaNorm / (nodeCount * Math.sqrt(sheafInstance.qDim)), 0, 1) : 0;
 
-    // Update edge opacities
-    if (mergedEdgesMesh && sheafInstance.adjacencyMatrix) {
-        const opacities = new Float32Array(edges.length);
-        edges.forEach((_, idx) => {
-            const [u, v] = sheafInstance.graph.edges[idx];
+    if (mergedNodesMesh && mergedNodesMesh.material) {
+        // Adjust overall emissive color based on average qualia activity
+        const baseColor = new THREE.Color(0x001122);
+        const activeColor = new THREE.Color(0x4af); // Primary blue for active
+        mergedNodesMesh.material.emissive.copy(baseColor).lerp(activeColor, avgQualiaIntensity * 0.5); // Subtle glow
+    }
+
+
+    // --- Dynamic Edge Properties (Opacity/Color): Also best with custom shader for per-instance effects ---
+    // Similar to nodes, for per-edge opacity/color, a custom shader reading attributes is ideal.
+    // Otherwise, we can only set a single opacity/color for the entire mergedEdgesMesh.
+    if (mergedEdgesMesh && mergedEdgesMesh.material && sheafInstance.adjacencyMatrix) {
+        let totalWeight = 0;
+        let edgeCount = 0;
+        sheafInstance.graph.edges.forEach(([u, v]) => {
             const uIdx = sheafInstance.graph.vertices.indexOf(u);
             const vIdx = sheafInstance.graph.vertices.indexOf(v);
-            opacities[idx] = uIdx !== -1 && vIdx !== -1 ? clamp(sheafInstance.adjacencyMatrix[uIdx][vIdx] || 0.5, 0.2, 0.8) : 0.5;
+            if (uIdx !== -1 && vIdx !== -1 && sheafInstance.adjacencyMatrix[uIdx] && Number.isFinite(sheafInstance.adjacencyMatrix[uIdx][vIdx])) {
+                totalWeight += sheafInstance.adjacencyMatrix[uIdx][vIdx];
+                edgeCount++;
+            }
         });
-        mergedEdgesMesh.geometry.setAttribute('opacity', new THREE.BufferAttribute(opacities, 1));
-        mergedEdgesMesh.geometry.attributes.opacity.needsUpdate = true;
+        const avgWeight = edgeCount > 0 ? clamp(totalWeight / edgeCount, 0.1, 1.0) : 0.1;
+        mergedEdgesMesh.material.opacity = clamp(avgWeight, 0.2, 0.8);
+        mergedEdgesMesh.material.needsUpdate = true; // Essential for transparent materials
     }
 }
-// --- END OF FILE opt-three.js ---
