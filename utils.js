@@ -50,6 +50,9 @@ export function hideLoading(panel) {
 }
 
 // --- Web Worker for Heavy Computations ---
+// IMPORTANT: The workerLogicString must be a single string.
+// Multiline string literals with backticks (`) are supported by ES6.
+// Ensure your browser/environment supports ES6.
 const workerLogicString = `
 // Worker scope utility functions (must be self-contained)
 
@@ -99,8 +102,21 @@ function isFiniteMatrix(m) {
 }
 
 function matVecMul(m, v) {
+    // VERBOSE DEBUGGING LOGS FOR WORKER
+    // console.log('Worker matVecMul: Processing...');
+    // console.log('Worker matVecMul: Input matrix dimensions (rows x cols):', m.length, 'x', m[0] ? m[0].length : 'N/A');
+    // console.log('Worker matVecMul: Input vector length:', v.length);
+    // console.log('Worker matVecMul: isFiniteMatrix(m):', isFiniteMatrix(m));
+    // console.log('Worker matVecMul: isFiniteVector(v):', isFiniteVector(v));
+    // if (!isFiniteMatrix(m) || !isFiniteVector(v)) {
+    //     console.error('Worker matVecMul: Detected non-finite input:', {matrix_sample: m.slice(0, 2).map(row => row.slice(0, 5)), vector_sample: v.slice(0, 5)});
+    // }
+
     const r = m && m.length !== undefined ? m.length : 0;
-    if (r === 0) return new Float32Array(0);
+    if (r === 0) {
+        // console.warn('Worker matVecMul: Empty matrix input, returning empty vector.');
+        return new Float32Array(0);
+    }
     const c = m[0] && m[0].length !== undefined ? m[0].length : 0;
     
     if (!isFiniteMatrix(m)) {
@@ -108,7 +124,7 @@ function matVecMul(m, v) {
         return new Float32Array(r).fill(0);
     }
     if (!isFiniteVector(v) || v.length !== c) {
-        console.warn('Worker matVecMul: Input vector is non-finite or length mismatch. Returning zeros.', {v_length: v ? v.length : 'null', c});
+        console.warn('Worker matVecMul: Input vector is non-finite or length mismatch. Returning zeros.', {v_length: v ? v.length : 'null', c, is_finite_v: isFiniteVector(v)});
         return new Float32Array(r).fill(0);
     }
 
@@ -124,11 +140,13 @@ function matVecMul(m, v) {
         }
         out[i] = Number.isFinite(s) ? s : 0;
     }
+    // console.log('Worker matVecMul: Completed successfully, output sample:', out.slice(0, 5));
     return out;
 }
 
 function unflattenMatrix(data) {
     if (!data || !data.flatData || !isFiniteVector(data.flatData) || !Number.isFinite(data.rows) || !Number.isFinite(data.cols) || data.flatData.length !== data.rows * data.cols) {
+        console.warn('Worker unflattenMatrix: Invalid input data. Returning empty matrix.', data);
         return [];
     }
     const { flatData, rows, cols } = data;
@@ -145,6 +163,7 @@ function unflattenMatrix(data) {
 
 function flattenMatrix(matrix) {
     if (!isFiniteMatrix(matrix)) {
+        console.warn('Worker flattenMatrix: Input matrix is non-finite. Returning empty flattened matrix.');
         return { flatData: new Float32Array(0), rows: 0, cols: 0 };
     }
     const rows = matrix.length;
@@ -163,6 +182,7 @@ function flattenMatrix(matrix) {
 
 function transpose(matrix) {
     if (!isFiniteMatrix(matrix)) {
+        console.warn('Worker transpose: Input matrix is non-finite. Returning empty matrix.');
         return [];
     }
     const numRows = matrix.length;
@@ -256,7 +276,7 @@ function covarianceMatrix(states_array, eps = 1e-3) {
     for (let i = 0; i < n; i++) {
         for (let j = 0; j < d; j++) {
             const val = states[i][j];
-            mean[j] += Number.isFinite(val) ? val : 0;
+            mean[j] += (Number.isFinite(val) ? val : 0);
         }
     }
     for (let j = 0; j < d; j++) mean[j] /= n;
@@ -364,36 +384,32 @@ function matrixRank(M_flat_data) {
     return rank;
 }
 
-// Phase 1B: Smith Normal Form approx over GF(2) - Gaussian elimination for rank
 function smithNormalFormGF2(matrixData) {
     const M = unflattenMatrix(matrixData);
     if (!isFiniteMatrix(M) || M.length === 0) {
-        // console.warn('Worker smithNormalFormGF2: Input matrix is non-finite or empty. Returning rank 0.');
+        console.warn('Worker smithNormalFormGF2: Input matrix is non-finite or empty. Returning rank 0.');
         return { rank: 0 };
     }
     let rank = 0;
     const rows = M.length;
     const cols = M[0].length;
-    const workingM = M.map(row => new Float32Array(row));  // Copy to avoid modifying original
+    const workingM = M.map(row => new Float32Array(row));
 
     for (let col = 0; col < cols && rank < rows; col++) {
-        // Find pivot
         let pivotRow = rank;
         for (let row = rank + 1; row < rows; row++) {
-            if (workingM[row][col] > workingM[pivotRow][col]) {  // Prefer 1 over 0
+            if (workingM[row][col] > workingM[pivotRow][col]) {
                 pivotRow = row;
             }
         }
-        if (workingM[pivotRow][col] !== 1) continue;  // No pivot (all zeros in this column below rank)
+        if (workingM[pivotRow][col] !== 1) continue;
 
-        // Swap rows
         [workingM[rank], workingM[pivotRow]] = [workingM[pivotRow], workingM[rank]];
 
-        // Eliminate
         for (let row = 0; row < rows; row++) {
             if (row !== rank && workingM[row][col] === 1) {
                 for (let j = col; j < cols; j++) {
-                    workingM[row][j] = (workingM[row][j] + workingM[rank][j]) % 2;  // XOR operation in GF(2)
+                    workingM[row][j] = (workingM[row][j] + workingM[rank][j]) % 2;
                 }
             }
         }
@@ -412,35 +428,71 @@ self.onmessage = function(e) {
                 const matrixToTranspose = unflattenMatrix(data.matrix); 
                 const transposedMatrix = transpose(matrixToTranspose);
                 result = flattenMatrix(transposedMatrix);
+                // Validate result for 'transpose'
+                if (!result || !isFiniteVector(result.flatData)) {
+                    console.error(\`Worker: Task \${type} (id: \${id}) returned non-finite flattened matrix. Returning empty.\`);
+                    result = { flatData: new Float32Array(0), rows: 0, cols: 0 };
+                }
                 break;
             case 'matVecMul':
                 const matrixForMatVecMul = unflattenMatrix(data.matrix);
                 result = matVecMul(matrixForMatVecMul, data.vector);
+                // Validate result for 'matVecMul'
+                if (!isFiniteVector(result)) {
+                    console.error(\`Worker: Task \${type} (id: \${id}) returned non-finite vector result. Returning zeros.\`);
+                    result = new Float32Array((data.b || data.vector || []).length).fill(0);
+                }
                 break;
             case 'solveLinearSystemCG':
                 result = solveLinearSystemCG(data.A, data.b, data.opts);
+                // Validate result for 'solveLinearSystemCG'
+                if (!isFiniteVector(result)) {
+                    console.error(\`Worker: Task \${type} (id: \${id}) returned non-finite vector result. Returning zeros.\`);
+                    result = new Float32Array((data.b || data.vector || []).length).fill(0);
+                }
                 break;
             case 'covarianceMatrix':
                 result = covarianceMatrix(data.states, data.eps);
+                // Validate result for 'covarianceMatrix'
+                if (!isFiniteMatrix(result)) {
+                    console.error(\`Worker: Task \${type} (id: \${id}) returned non-finite matrix result. Returning empty.\`);
+                    result = [];
+                }
                 break;
             case 'matrixSpectralNormApprox':
                 result = matrixSpectralNormApprox(data.matrix);
+                // Validate result for 'matrixSpectralNormApprox'
+                if (!Number.isFinite(result)) {
+                    console.error(\`Worker: Task \${type} (id: \${id}) returned non-finite number result. Returning 0.\`);
+                    result = 0;
+                }
                 break;
             case 'matrixRank':
                 result = matrixRank(data.matrix);
+                // Validate result for 'matrixRank'
+                if (!Number.isFinite(result?.rank)) {
+                     console.error(\`Worker: Task \${type} (id: \${id}) returned non-finite rank. Returning {rank: 0}.\`);
+                     result = { rank: 0 };
+                }
                 break;
             // Phase 1B: New task for homology rank
             case 'smithNormalForm':
                 result = smithNormalFormGF2(data.matrix);
+                // Validate result for 'smithNormalForm'
+                if (!Number.isFinite(result?.rank)) {
+                     console.error(\`Worker: Task \${type} (id: \${id}) returned non-finite rank. Returning {rank: 0}.\`);
+                     result = { rank: 0 };
+                }
                 break;
             default:
                 result = { error: 'Unknown message type' };
                 break;
         }
+
         self.postMessage({ type: type + 'Result', id, result });
     } catch (error) {
         console.error('Worker error for type ' + type + ':', error);
-        self.postMessage({ type: type + 'Error', id, error: error.message || error.toString() });
+        self.postMessage({ type: type + 'Error', id, error: error.message || String(error) });
     }
 };
 `;
@@ -450,12 +502,13 @@ const worker = new Worker(URL.createObjectURL(new Blob([workerLogicString], { ty
 const workerCallbacks = new Map();
 let nextWorkerTaskId = 0;
 
-export function runWorkerTask(type, data, timeout = 10000) {
+export function runWorkerTask(type, data, timeout = 20000) { // Increased timeout to 20 seconds
     return new Promise((resolve, reject) => {
         const id = nextWorkerTaskId++;
         const timer = setTimeout(() => {
             workerCallbacks.delete(id);
             const errorMessage = `Worker task '${type}' (id: ${id}) timed out after ${timeout}ms.`;
+            console.error(`ERROR: ${errorMessage}`); // Log to console as error
             logger.error(errorMessage);
             reject(new Error(errorMessage));
         }, timeout);
@@ -465,52 +518,29 @@ export function runWorkerTask(type, data, timeout = 10000) {
 
                 let reconstructedResult = result;
 
-                if (type === 'matVecMul' || type === 'solveLinearSystemCG') {
-                    if (reconstructedResult && !(reconstructedResult instanceof Float32Array)) {
-                        try {
-                            reconstructedResult = new Float32Array(Object.values(reconstructedResult));
-                        } catch (e) {
-                            reconstructedResult = null;
-                        }
-                    }
-                    if (!reconstructedResult || !isFiniteVector(reconstructedResult)) {
-                        logger.error(`runWorkerTask: Invalid vector from worker for ${type}. Forcing zeros.`, { result: reconstructedResult });
-                        const expectedLength = (data && data.b) ? data.b.length : ((data && data.vector) ? data.vector.length : 0);
-                        reconstructedResult = vecZeros(expectedLength);
-                    }
-                } else if (type === 'covarianceMatrix') {
-                    if (reconstructedResult && Array.isArray(reconstructedResult) && reconstructedResult.length > 0 && !(reconstructedResult[0] instanceof Float32Array)) {
-                        try {
-                            reconstructedResult = reconstructedResult.map(row => new Float32Array(Object.values(row)));
-                        } catch (e) {
-                            reconstructedResult = null;
-                        }
-                    }
-                    if (!reconstructedResult || !isFiniteMatrix(reconstructedResult)) {
-                        logger.error(`runWorkerTask: Invalid matrix from worker for ${type}. Forcing empty matrix.`, { result: reconstructedResult });
-                        reconstructedResult = [];
-                    }
-                } else if (type === 'matrixSpectralNormApprox') { // Direct numeric result
-                    if (!Number.isFinite(reconstructedResult)) {
-                        logger.error(`runWorkerTask: Invalid number from worker for ${type}. Forcing zero.`, { result: reconstructedResult });
-                        reconstructedResult = 0;
-                    }
-                } else if (type === 'matrixRank' || type === 'smithNormalForm') { // Object with 'rank' property
-                    if (!Number.isFinite(reconstructedResult?.rank)) {
-                        logger.error(`runWorkerTask: Invalid rank from worker for ${type}. Forcing zero.`, { result: reconstructedResult });
-                        reconstructedResult = { rank: 0 };
-                    }
-                } else if (type === 'transpose') {
-                    if (!reconstructedResult || !reconstructedResult.flatData || !isFiniteVector(reconstructedResult.flatData)) {
-                        logger.error(`runWorkerTask: Invalid flattened matrix from worker for ${type}. Forcing empty.`, { result: reconstructedResult });
-                        reconstructedResult = { flatData: new Float32Array(0), rows: 0, cols: 0 };
+                // Client-side validation is now handled by the worker itself in each case,
+                // so we only need to ensure the worker didn't explicitly return null/undefined on error.
+                if (reconstructedResult === null || reconstructedResult === undefined) {
+                    console.error(`ERROR: Worker task ${type} (id: ${id}) returned null/undefined result.`);
+                    logger.error(`Worker task ${type} (id: ${id}) returned null/undefined result.`);
+                    // Attempt to return a safe default based on type if possible
+                    if (type === 'matVecMul' || type === 'solveLinearSystemCG') {
+                         reconstructedResult = vecZeros((data.b || data.vector || []).length);
+                    } else if (type === 'covarianceMatrix') {
+                         reconstructedResult = [];
+                    } else if (type === 'matrixSpectralNormApprox') {
+                         reconstructedResult = 0;
+                    } else if (type === 'matrixRank' || type === 'smithNormalForm') {
+                         reconstructedResult = { rank: 0 };
+                    } else if (type === 'transpose') {
+                         reconstructedResult = { flatData: new Float32Array(0), rows: 0, cols: 0 };
                     }
                 }
-                
                 resolve(reconstructedResult);
             },
             reject: (error) => {
                 clearTimeout(timer);
+                console.error(`ERROR: Worker task ${type} (id: ${id}) failed: ${error.message || error.toString()}. Rejecting.`); // Log to console
                 logger.error(`Worker task ${type} (id: ${id}) error: ${error.message || error.toString()}. Rejecting.`);
                 reject(error);
             },
@@ -525,6 +555,7 @@ worker.onmessage = function(e) {
     const callback = workerCallbacks.get(id);
     if (callback) {
         if (error) {
+            console.error(`ERROR: Worker message error for type ${messageType.replace('Result', '')} (id: ${id}): ${error}`); // Log to console
             logger.error(`Worker message error for type ${messageType.replace('Result', '')} (id: ${id}): ${error}`);
             callback.reject(new Error(error));
         } else {
@@ -535,7 +566,8 @@ worker.onmessage = function(e) {
 };
 
 worker.onerror = function(error) {
-    logger.error('Worker global error:', error.message || error.toString());
+    console.error('CRITICAL ERROR: Worker global error:', error.message || error.toString(), error); // Log to console
+    logger.error('CRITICAL ERROR: Worker global error:', error.message || error.toString());
     workerCallbacks.forEach(cb => cb.reject(new Error('Worker crashed')));
     workerCallbacks.clear();
 };
@@ -553,7 +585,9 @@ export function dot(a, b) {
     let s = 0.0;
     for (let i = 0, n = a.length; i < n; ++i) {
         const ai = a[i], bi = b[i];
-        if (!Number.isFinite(ai) || !Number.isFinite(bi)) return 0;
+        if (!Number.isFinite(ai) || !Number.isFinite(bi)) {
+            return 0;
+        }
         s += ai * bi;
     }
     return s;
@@ -586,11 +620,11 @@ export function vecScale(v, s) {
     return out;
 }
 export function tanhVec(v) {
-    if (!isFiniteVector(v)) { logger.warn('tanhVec: Input vector is not finite. Returning zeros.'); return vecZeros((v && v.length) || 0); }
+    if (!isFiniteVector(v)) { console.warn('tanhVec: Input vector is not finite. Returning zeros.'); logger.warn('tanhVec: Input vector is not finite. Returning zeros.'); return vecZeros((v && v.length) || 0); }
     return new Float32Array(v.map(x => Math.tanh(x)));
 }
 export function sigmoidVec(v) {
-    if (!isFiniteVector(v)) { logger.warn('sigmoidVec: Input vector is not finite. Returning zeros.'); return vecZeros((v && v.length) || 0); }
+    if (!isFiniteVector(v)) { console.warn('sigmoidVec: Input vector is not finite. Returning zeros.'); logger.warn('sigmoidVec: Input vector is not finite. Returning zeros.'); return vecZeros((v && v.length) || 0); }
     return new Float32Array(v.map(x => 1 / (1 + Math.exp(-x))));
 }
 export function vecMul(a, b) {
@@ -613,7 +647,7 @@ export function isFiniteVector(v) {
     if (!v || !(Array.isArray(v) || v instanceof Float32Array)) {
         return false;
     }
-    if (v.length > 0 && typeof v[0] === 'object' && v[0] !== null) {
+    if (v.length > 0 && typeof v[0] === 'object' && v[0] !== null) { // Catch arrays of objects
         return false;
     }
     for (let i = 0; i < v.length; i++) {
@@ -624,16 +658,13 @@ export function isFiniteVector(v) {
     return true;
 }
 export function isFiniteMatrix(m) {
-    if (!Array.isArray(m)) return false; // If not an array, it's not a matrix.
-    if (m.length === 0) return true; // An empty array is a valid (but empty) matrix.
+    if (!Array.isArray(m)) return false;
+    if (m.length === 0) return true;
     const firstRowLength = m[0] && m[0].length !== undefined ? m[0].length : 0;
-    // The previous line 'if (m.length > 0 && firstRowLength === 0) return true;' can be removed or refined
-    // as the .every() check below should handle empty rows correctly if they exist.
-    // For simplicity, we can rely on .every() to check for valid rows and consistent length.
     return m.every(row => (Array.isArray(row) || row instanceof Float32Array) && row.length === firstRowLength && isFiniteVector(row));
 }
 export function flattenMatrix(matrix) {
-    if (!isFiniteMatrix(matrix)) { logger.warn('flattenMatrix: Input matrix is not finite. Returning empty.'); return { flatData: new Float32Array(0), rows: 0, cols: 0 }; }
+    if (!isFiniteMatrix(matrix)) { console.warn('flattenMatrix: Input matrix is not finite. Returning empty.'); logger.warn('flattenMatrix: Input matrix is not finite. Returning empty.'); return { flatData: new Float32Array(0), rows: 0, cols: 0 }; }
     const rows = matrix.length;
     const cols = (matrix[0] && matrix[0].length !== undefined) ? matrix[0].length : 0;
     if (rows === 0 || cols === 0) return { flatData: new Float32Array(0), rows, cols };
@@ -642,7 +673,7 @@ export function flattenMatrix(matrix) {
     return { flatData, rows, cols };
 }
 export function unflattenMatrix(data) {
-    if (!data || !data.flatData || !Number.isFinite(data.rows) || !Number.isFinite(data.cols) || data.flatData.length !== data.rows * data.cols) return [];
+    if (!data || !data.flatData || !Number.isFinite(data.rows) || !Number.isFinite(data.cols) || data.flatData.length !== data.rows * data.cols) { console.warn('unflattenMatrix: Invalid input data. Returning empty.'); return []; }
     const { flatData, rows, cols } = data;
     const matrix = [];
     for (let i = 0; i < rows; i++) {
@@ -659,7 +690,7 @@ export function logDeterminantFromDiagonal(M) {
     let s = 0;
     for (let i=0;i<M.length;i++) {
         const val = (M[i] && M[i][i] !== undefined) ? M[i][i] : 0;
-        if (!Number.isFinite(val)) { logger.warn('logDeterminantFromDiagonal: Non-finite diagonal element. Skipping.'); continue; }
+        if (!Number.isFinite(val)) { console.warn('logDeterminantFromDiagonal: Non-finite diagonal element. Skipping.'); logger.warn('logDeterminantFromDiagonal: Non-finite diagonal element. Skipping.'); continue; }
         s += Math.log(Math.max(Math.abs(val), 1e-12));
     }
     return s;
@@ -673,13 +704,15 @@ export function logDeterminantFromDiagonal(M) {
 export function softmax(logits) {
     if (!logits || !(logits instanceof Float32Array) || !isFiniteVector(logits) || logits.length === 0) {
         const fallbackLength = (logits && logits.length > 0) ? logits.length : 4;
-        logger.warn(`Softmax input logits are invalid or empty. Returning uniform probabilities for length ${fallbackLength}.`, { logits });
+        console.warn(`Softmax input logits are invalid or empty. Returning uniform probabilities for length ${fallbackLength}.`, { logits });
+        logger.warn(`Softmax input logits are invalid or empty. Returning uniform probabilities for length ${fallbackLength}.`);
         return vecZeros(fallbackLength).fill(1 / fallbackLength);
     }
     
     const maxLogit = Math.max(...logits);
     if (!Number.isFinite(maxLogit)) {
-        logger.warn('Softmax maxLogit is non-finite. Returning uniform probabilities.', { maxLogit, logits });
+        console.warn('Softmax maxLogit is non-finite. Returning uniform probabilities.', { maxLogit, logits });
+        logger.warn('Softmax maxLogit is non-finite. Returning uniform probabilities.');
         return vecZeros(logits.length).fill(1 / logits.length);
     }
 
@@ -696,7 +729,8 @@ export function softmax(logits) {
     
     const safe_sum_exp_logits = (Number.isFinite(sum_exp_logits) && sum_exp_logits > 1e-9) ? sum_exp_logits : 1e-9;
     if (!Number.isFinite(sum_exp_logits) || sum_exp_logits <= 1e-9) {
-        logger.warn(`Softmax sum_exp_logits is non-finite or zero (${sum_exp_logits}). Using epsilon fallback.`, { sum_exp_logits, exp_logits });
+        console.warn(`Softmax sum_exp_logits is non-finite or zero (${safe_sum_exp_logits}). Using epsilon fallback.`, { sum_exp_logits, exp_logits });
+        logger.warn(`Softmax sum_exp_logits is non-finite or zero. Using epsilon fallback.`);
     }
 
     const resultProbs = new Float32Array(logits.length);
@@ -706,7 +740,8 @@ export function softmax(logits) {
     }
 
     if (!isFiniteVector(resultProbs)) {
-        logger.warn('Softmax output probabilities are non-finite after calculation. Returning uniform probabilities.', { resultProbs });
+        console.warn('Softmax output probabilities are non-finite after calculation. Returning uniform probabilities.', { resultProbs });
+        logger.warn('Softmax output probabilities are non-finite after calculation. Returning uniform probabilities.');
         return vecZeros(logits.length).fill(1 / logits.length);
     }
     return resultProbs;
