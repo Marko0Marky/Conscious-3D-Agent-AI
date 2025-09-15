@@ -1,24 +1,21 @@
-// --- START OF FILE ai-agents.js ---
 import { OntologicalWorldModel } from './owm.js';
 import { clamp, vecZeros, isFiniteVector, logger } from './utils.js';
 
-// Use global tf from CDN (no import needed). Add a check for its existence.
+// Check for TensorFlow.js global availability
 const tf = window.tf || (typeof tf !== 'undefined' ? tf : null);
 if (!tf) {
     logger.error('TensorFlow.js not loaded globally. Check CDN script in HTML.');
 } else {
-    // Initialize WebGL backend for TensorFlow.js for GPU-accelerated ops
     tf.setBackend('webgl').then(() => {
         logger.info('TensorFlow.js WebGL backend initialized.');
     }).catch(e => {
-        logger.warn('Failed to set WebGL backend, falling back to CPU.', e);
+        logger.warn('Failed to set WebGL backend, falling back to CPU.', { error: e.message });
         tf.setBackend('cpu');
     });
 }
 
 /**
  * Base AI Agent class for decision-making and learning in an environment.
- * Research Improvements: Self-play curiosity bonus, adaptive temperature decay, verifiable meta-rewards.
  */
 export class BaseAIAgent {
     constructor(stateDim = 13, actionDim = 4, game = null, isPlayerTwo = false, ontologicalWorldModel = null) {
@@ -37,21 +34,34 @@ export class BaseAIAgent {
         this.curiosityBonus = 0;
         this.temperature = 1.0;
         this.lastStateVec = vecZeros(stateDim);
-        this.logFrequency = 30; // Log agent activity every N steps
+        this.logFrequency = 30;
+        logger.info(`BaseAIAgent initialized: stateDim=${this.stateDim}, actionDim=${this.actionDim}, isPlayerTwo=${this.owm.isPlayerTwo}`);
     }
 
     async initialize() {
-        if (this.owm && !this.owm.ready) {
-            logger.warn(`BaseAIAgent's OWM was passed but not ready. Attempting to initialize internally.`);
+        if (!this.owm.ready) {
+            logger.warn('BaseAIAgent: OWM not ready. Initializing.');
             await this.owm.initialize();
         }
-        logger.info(`BaseAIAgent initialized: stateDim=${this.stateDim}, actionDim=${this.actionDim}, isPlayerTwo=${this.owm.isPlayerTwo}, OWM_Ready=${this.owm.ready}`);
+        logger.info(`BaseAIAgent ready: OWM_Ready=${this.owm.ready}`);
     }
 
     createStateVector(gameState) {
-        if (!gameState || !gameState.player || !gameState.ai || !gameState.playerTarget || !gameState.aiTarget) {
-            logger.error('BaseAIAgent.createStateVector: Invalid gameState. Returning zeros.', { gameState });
+        if (!gameState || typeof gameState !== 'object') {
+            logger.error('BaseAIAgent.createStateVector: Invalid gameState.', { gameState });
             return vecZeros(this.stateDim);
+        }
+
+        const requiredProps = ['player', 'ai', 'playerTarget', 'aiTarget'];
+        for (const prop of requiredProps) {
+            if (!gameState[prop] || typeof gameState[prop] !== 'object') {
+                logger.error(`BaseAIAgent.createStateVector: Missing or invalid ${prop}.`, { gameState });
+                return vecZeros(this.stateDim);
+            }
+            if (!Number.isFinite(gameState[prop].x) || !Number.isFinite(gameState[prop].z) || !Number.isFinite(gameState[prop].rot)) {
+                logger.error(`BaseAIAgent.createStateVector: Non-finite values in ${prop}.`, gameState[prop]);
+                return vecZeros(this.stateDim);
+            }
         }
 
         const agent = this.owm.isPlayerTwo ? gameState.ai : gameState.player;
@@ -61,28 +71,28 @@ export class BaseAIAgent {
         const worldHalfSize = this.game?.constructor?.WORLD_SIZE / 2 || 50;
         const worldSize = this.game?.constructor?.WORLD_SIZE || 100;
 
-        const agentX_norm = (Number.isFinite(agent.x) ? agent.x : 0) / worldHalfSize;
-        const agentZ_norm = (Number.isFinite(agent.z) ? agent.z : 0) / worldHalfSize;
-        const agentRot_norm = (Number.isFinite(agent.rot) ? agent.rot : 0) / (2 * Math.PI);
-        const targetX_norm = (Number.isFinite(target.x) ? target.x : 0) / worldHalfSize;
-        const targetZ_norm = (Number.isFinite(target.z) ? target.z : 0) / worldHalfSize;
-        const vecX = (Number.isFinite(target.x) ? target.x : 0) - (Number.isFinite(agent.x) ? agent.x : 0);
-        const vecZ = (Number.isFinite(target.z) ? target.z : 0) - (Number.isFinite(agent.z) ? agent.z : 0);
+        const agentX_norm = clamp(agent.x / worldHalfSize, -1, 1);
+        const agentZ_norm = clamp(agent.z / worldHalfSize, -1, 1);
+        const agentRot_norm = clamp(agent.rot / (2 * Math.PI), -1, 1);
+        const targetX_norm = clamp(target.x / worldHalfSize, -1, 1);
+        const targetZ_norm = clamp(target.z / worldHalfSize, -1, 1);
+        const vecX = target.x - agent.x;
+        const vecZ = target.z - agent.z;
         const dist = Math.sqrt(vecX * vecX + vecZ * vecZ);
-        const vecX_norm = vecX / worldSize;
-        const vecZ_norm = vecZ / worldSize;
-        const dist_norm = dist / worldSize;
+        const vecX_norm = clamp(vecX / worldSize, -1, 1);
+        const vecZ_norm = clamp(vecZ / worldSize, -1, 1);
+        const dist_norm = clamp(dist / worldSize, -1, 1);
 
         const agent3D = this.owm.isPlayerTwo ? this.game?.ai : this.game?.player;
         const rayDetections = this.game?.getRaycastDetections?.(agent3D) || { left: 0, center: 0, right: 0 };
-        const rayLeft_norm = Number.isFinite(rayDetections.left) ? rayDetections.left : 0;
-        const rayCenter_norm = Number.isFinite(rayDetections.center) ? rayDetections.center : 0;
-        const rayRight_norm = Number.isFinite(rayDetections.right) ? rayDetections.right : 0;
+        const rayLeft_norm = clamp(Number.isFinite(rayDetections.left) ? rayDetections.left : 0, 0, 1);
+        const rayCenter_norm = clamp(Number.isFinite(rayDetections.center) ? rayDetections.center : 0, 0, 1);
+        const rayRight_norm = clamp(Number.isFinite(rayDetections.right) ? rayDetections.right : 0, 0, 1);
 
-        const oppVecX = (Number.isFinite(opponent.x) ? opponent.x : 0) - (Number.isFinite(agent.x) ? agent.x : 0);
-        const oppVecZ = (Number.isFinite(opponent.z) ? opponent.z : 0) - (Number.isFinite(agent.z) ? agent.z : 0);
-        const oppVecX_norm = oppVecX / worldSize;
-        const oppVecZ_norm = oppVecZ / worldSize;
+        const oppVecX = opponent.x - agent.x;
+        const oppVecZ = opponent.z - agent.z;
+        const oppVecX_norm = clamp(oppVecX / worldSize, -1, 1);
+        const oppVecZ_norm = clamp(oppVecZ / worldSize, -1, 1);
 
         const stateVec = new Float32Array([
             agentX_norm, agentZ_norm, agentRot_norm,
@@ -92,23 +102,68 @@ export class BaseAIAgent {
             oppVecX_norm, oppVecZ_norm
         ]);
 
-        const clampedStateVec = new Float32Array(stateVec.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0));
-
-        if (!isFiniteVector(clampedStateVec) || clampedStateVec.length !== this.stateDim) {
-            logger.error(`BaseAIAgent.createStateVector: Generated state vector is invalid. Returning zeros.`, { clampedStateVec });
+        if (!isFiniteVector(stateVec) || stateVec.length !== this.stateDim) {
+            logger.error('BaseAIAgent.createStateVector: Invalid state vector.', { stateVec });
             return vecZeros(this.stateDim);
         }
-        return clampedStateVec;
+        return stateVec;
     }
 
     async makeDecision(gameState) {
-        logger.warn('BaseAIAgent.makeDecision should be overridden by derived classes.');
+        logger.warn('BaseAIAgent.makeDecision: Should be overridden by derived classes.');
         return { action: [0, 0, 0, 1], chosenActionIndex: 3, corrupted: true, activations: [] };
     }
 
-    async learn(state, action, reward, nextState, done) {
-        logger.warn('BaseAIAgent.learn should be overridden by derived classes.');
-        return { actorLoss: 0, criticLoss: 0, predictionLoss: 0 };
+    async learn(preGameState, actionIndex, reward, newGameState, isDone) {
+        if (!this.owm.ready) {
+            logger.warn('BaseAIAgent: OWM not ready for learning. Skipping.');
+            return { actorLoss: 0, criticLoss: 0, predictionLoss: 0 };
+        }
+
+        const stateVec = this.createStateVector(preGameState);
+        const nextStateVec = this.createStateVector(newGameState);
+
+        if (!isFiniteVector(stateVec) || !isFiniteVector(nextStateVec) || stateVec.length !== this.stateDim || nextStateVec.length !== this.stateDim) {
+            logger.error('BaseAIAgent.learn: Invalid state or nextState vectors.', { stateVec, nextStateVec });
+            return { actorLoss: 0, criticLoss: 0, predictionLoss: 0 };
+        }
+
+        this.stepCount++;
+
+        const h1Influence = clamp(this.owm.qualiaSheaf.h1Dimension / (this.owm.qualiaSheaf.graph.edges.length || 1), 0, 1);
+        const curiosityBonus = clamp(this.owm.predictionError, 0, 1) * 0.01 * (1 + h1Influence * 0.5);
+        let totalReward = Number.isFinite(reward) ? reward + curiosityBonus : curiosityBonus;
+        if (actionIndex === 3) totalReward -= 0.01;
+
+        const nextFullInput = this.owm._getFullInputVector(nextStateVec);
+        const { stateValue: nextValue, anticipatoryReward: nextAnticipatoryReward, corrupted: nextStateCorrupted } = await this.owm.forward(nextFullInput);
+
+        const safeNextValue = Number.isFinite(nextValue) && !nextStateCorrupted ? nextValue : 0;
+        const safeNextAnticipatoryReward = Number.isFinite(nextAnticipatoryReward) && !nextStateCorrupted ? nextAnticipatoryReward : 0;
+
+        const targetValue = isDone ? totalReward : totalReward + this.gamma * (safeNextValue + 0.1 * safeNextAnticipatoryReward);
+
+        const { actorLoss, criticLoss, predictionLoss } = await this.owm.learn(
+            targetValue - this.owm.lastStateValue,
+            targetValue,
+            nextStateVec,
+            this.lr
+        );
+
+        this.epsilon = Math.max(this.epsilonMin, this.epsilon * this.epsilonDecay);
+        const uncertaintyFactor = 1 + clamp(this.owm.predictionError, 0, 5) * 0.05;
+        this.epsilon = clamp(this.epsilon * uncertaintyFactor, this.epsilonMin, 1.0);
+        this.epsilon = Number.isFinite(this.epsilon) ? this.epsilon : this.epsilonMin;
+        this.temperature = clamp(this.temperature * 0.999, 0.5, 2.0);
+
+        this.memory.push({ state: stateVec, action: actionIndex, reward: totalReward, nextState: nextStateVec, done: isDone });
+        if (this.memory.length > this.memorySize) this.memory.shift();
+
+        if (this.stepCount % this.logFrequency === 0) {
+            logger.info(`BaseAIAgent learned: actorLoss=${actorLoss.toFixed(3)}, criticLoss=${criticLoss.toFixed(3)}, predictionLoss=${predictionLoss.toFixed(3)}, epsilon=${this.epsilon.toFixed(3)}`);
+        }
+
+        return { actorLoss, criticLoss, predictionLoss };
     }
 
     async modulateParameters() {
@@ -119,7 +174,6 @@ export class BaseAIAgent {
         this.gamma = clamp(this.gamma * (1 + 0.005 * safePhi), 0.9, 0.999);
         await this.owm.qualiaSheaf.tuneParameters();
 
-        // Only log modulation if parameters actually changed or at log frequency
         if (this.stepCount % this.logFrequency === 0) {
             logger.info(`BaseAIAgent parameters modulated: lr=${this.lr.toFixed(5)}, gamma=${this.gamma.toFixed(3)}`);
         }
@@ -174,7 +228,7 @@ export class LearningAIAgent extends BaseAIAgent {
         const { action: actionString, chosenActionIndex: owmChosenActionIndex, actionProbs, stateValue, activations, variance, anticipatoryReward, corrupted } = await this.owm.chooseAction(stateVec, scaledEpsilon);
 
         if (corrupted) {
-            logger.warn(`LearningAIAgent: World model returned a corrupted decision. Defaulting to IDLE.`);
+            logger.warn('LearningAIAgent: World model returned corrupted decision. Defaulting to IDLE.');
             return { action: actions[3].vec, activations: [], corrupted: true, chosenActionIndex: 3 };
         }
 
@@ -184,65 +238,13 @@ export class LearningAIAgent extends BaseAIAgent {
         const curiosity = clamp(variance.reduce((sum, v) => sum + v, 0) / variance.length, 0, 1);
         this.curiosityBonus = 0.1 * curiosity * (1 + this.owm.qualiaSheaf.h1Dimension * 0.05);
 
-        const decision = { action: actions[chosenActionIndex].vec, activations, corrupted: false, chosenActionIndex: chosenActionIndex };
+        const decision = { action: actions[chosenActionIndex].vec, activations, corrupted: false, chosenActionIndex };
         this.actionQueue.push(decision);
 
-        // Log decision less frequently
         if (this.stepCount % this.logFrequency === 0) {
             logger.info(`LearningAIAgent decided action=${actionString} (idx=${chosenActionIndex}), stateValue=${stateValue.toFixed(3)}, curiosityBonus=${this.curiosityBonus.toFixed(3)}`);
         }
         return this.actionQueue.shift() || decision;
-    }
-
-    async learn(preGameState, actionIndex, reward, newGameState, isDone) {
-        if (!this.owm.ready) {
-            logger.warn('LearningAIAgent: OWM not ready for learning. Skipping.');
-            return;
-        }
-
-        const stateVec = this.createStateVector(preGameState);
-        const nextStateVec = this.createStateVector(newGameState);
-
-        if (!isFiniteVector(stateVec) || !isFiniteVector(nextStateVec) || stateVec.length !== this.stateDim || nextStateVec.length !== this.stateDim) {
-            logger.error('LearningAIAgent.learn: Invalid state or nextState vectors. Skipping learning.', { stateVec, nextStateVec });
-            return;
-        }
-
-        this.stepCount++;
-
-        const h1Influence = clamp(this.owm.qualiaSheaf.h1Dimension / (this.owm.qualiaSheaf.graph.edges.length || 1), 0, 1);
-        const curiosityBonus = clamp(this.owm.predictionError, 0, 1) * 0.01 * (1 + h1Influence * 0.5);
-        let totalReward = Number.isFinite(reward) ? reward + curiosityBonus : curiosityBonus;
-        if (actionIndex === 3) totalReward -= 0.01;
-
-        const nextFullInput = this.owm._getFullInputVector(nextStateVec);
-        const { stateValue: nextValue, anticipatoryReward: nextAnticipatoryReward, corrupted: nextStateCorrupted } = await this.owm.forward(nextFullInput);
-
-        const safeNextValue = Number.isFinite(nextValue) && !nextStateCorrupted ? nextValue : 0;
-        const safeNextAnticipatoryReward = Number.isFinite(nextAnticipatoryReward) && !nextStateCorrupted ? nextAnticipatoryReward : 0;
-
-        const targetValue = isDone ? totalReward : totalReward + this.gamma * (safeNextValue + 0.1 * safeNextAnticipatoryReward);
-
-        const { actorLoss, criticLoss, predictionLoss } = await this.owm.learn(
-            targetValue - this.owm.lastStateValue,
-            targetValue,
-            nextStateVec,
-            this.lr
-        );
-
-        this.epsilon = Math.max(this.epsilonMin, this.epsilon * this.epsilonDecay);
-        const uncertaintyFactor = 1 + clamp(this.owm.predictionError, 0, 5) * 0.05;
-        this.epsilon = clamp(this.epsilon * uncertaintyFactor, this.epsilonMin, 1.0);
-        this.epsilon = Number.isFinite(this.epsilon) ? this.epsilon : this.epsilonMin;
-        this.temperature = clamp(this.temperature * 0.999, 0.5, 2.0);
-
-        this.memory.push({ state: stateVec, action: actionIndex, reward: totalReward, nextState: nextStateVec, done: isDone });
-        if (this.memory.length > this.memorySize) this.memory.shift();
-
-        // Log learning less frequently
-        if (this.stepCount % this.logFrequency === 0) {
-            logger.info(`LearningAIAgent learned: actorLoss=${actorLoss.toFixed(3)}, criticLoss=${criticLoss.toFixed(3)}, predictionLoss=${predictionLoss.toFixed(3)}, epsilon=${this.epsilon.toFixed(3)}`);
-        }
     }
 }
 
@@ -253,7 +255,7 @@ export class StrategicAIAgent extends BaseAIAgent {
         this.actionQueue = [];
         this.planningHorizon = 5;
         this.avgStateValue = 0;
-        logger.info('StrategicAIAgent constructed with planning horizon=', this.planningHorizon);
+        logger.info(`StrategicAIAgent constructed with planningHorizon=${this.planningHorizon}`);
     }
 
     async makeDecision(gameState) {
@@ -291,7 +293,7 @@ export class StrategicAIAgent extends BaseAIAgent {
                 const { actionLogits, stateValue, variance, anticipatoryReward, corrupted: simulatedCorrupted } = await this.owm.forward(simulatedFullInput);
 
                 if (simulatedCorrupted) {
-                    logger.warn('StrategicAIAgent: Simulated forward pass resulted in corrupted state. Breaking planning loop.');
+                    logger.warn('StrategicAIAgent: Simulated forward pass corrupted. Breaking planning loop.');
                     totalValue = -Infinity;
                     break;
                 }
@@ -322,7 +324,7 @@ export class StrategicAIAgent extends BaseAIAgent {
         const { action: actionString, chosenActionIndex: owmChosenActionIndex, actionProbs, stateValue, activations, variance, anticipatoryReward, corrupted } = await this.owm.chooseAction(stateVec, scaledEpsilon);
 
         if (corrupted) {
-            logger.warn(`StrategicAIAgent: World model returned a corrupted decision for final action. Defaulting to IDLE.`);
+            logger.warn('StrategicAIAgent: World model returned corrupted decision. Defaulting to IDLE.');
             return { action: actions[3].vec, activations: [], corrupted: true, chosenActionIndex: 3 };
         }
 
@@ -332,7 +334,6 @@ export class StrategicAIAgent extends BaseAIAgent {
         const decision = { action: actions[bestAction].vec, activations, corrupted: false, chosenActionIndex: bestAction };
         this.actionQueue.push(decision);
 
-        // Log decision less frequently
         if (this.stepCount % this.logFrequency === 0) {
             logger.info(`StrategicAIAgent planned action=${actions[bestAction].name} (idx=${bestAction}), bestValue=${bestValue.toFixed(3)}, curiosityBonus=${this.curiosityBonus.toFixed(3)}`);
         }
@@ -340,65 +341,18 @@ export class StrategicAIAgent extends BaseAIAgent {
     }
 
     async simulateNextState(rawStateVec, action) {
+        if (!isFiniteVector(rawStateVec)) {
+            logger.warn('StrategicAIAgent.simulateNextState: Invalid input state. Returning zeros.');
+            return vecZeros(this.stateDim);
+        }
         const fullInput = this.owm._getFullInputVector(rawStateVec);
         const { nextStatePrediction, corrupted } = await this.owm.forward(fullInput);
 
         if (!isFiniteVector(nextStatePrediction) || corrupted) {
-            logger.warn('StrategicAIAgent.simulateNextState: Invalid next state prediction or corrupted. Returning zeros.');
+            logger.warn('StrategicAIAgent.simulateNextState: Invalid or corrupted prediction. Returning zeros.');
             return vecZeros(this.stateDim);
         }
         return nextStatePrediction.map(v => clamp(v + (Math.random() - 0.5) * 0.1, -10, 10));
-    }
-
-    async learn(preGameState, actionIndex, reward, newGameState, isDone) {
-        if (!this.owm.ready) {
-            logger.warn('StrategicAIAgent: OWM not ready for learning. Skipping.');
-            return;
-        }
-
-        const stateVec = this.createStateVector(preGameState);
-        const nextStateVec = this.createStateVector(newGameState);
-
-        if (!isFiniteVector(stateVec) || !isFiniteVector(nextStateVec) || stateVec.length !== this.stateDim || nextStateVec.length !== this.stateDim) {
-            logger.error('StrategicAIAgent.learn: Invalid state or nextState vectors. Skipping learning.', { stateVec, nextStateVec });
-            return;
-        }
-
-        this.stepCount++;
-
-        const h1Influence = clamp(this.owm.qualiaSheaf.h1Dimension / (this.owm.qualiaSheaf.graph.edges.length || 1), 0, 1);
-        const curiosityBonus = clamp(this.owm.predictionError, 0, 1) * 0.01 * (1 + h1Influence * 0.5);
-        let totalReward = Number.isFinite(reward) ? reward + curiosityBonus : curiosityBonus;
-        if (actionIndex === 3) totalReward -= 0.01;
-
-        const nextFullInput = this.owm._getFullInputVector(nextStateVec);
-        const { stateValue: nextValue, anticipatoryReward: nextAnticipatoryReward, corrupted: nextStateCorrupted } = await this.owm.forward(nextFullInput);
-
-        const safeNextValue = Number.isFinite(nextValue) && !nextStateCorrupted ? nextValue : 0;
-        const safeNextAnticipatoryReward = Number.isFinite(nextAnticipatoryReward) && !nextStateCorrupted ? nextAnticipatoryReward : 0;
-
-        const targetValue = isDone ? totalReward : totalReward + this.gamma * (safeNextValue + 0.1 * safeNextAnticipatoryReward);
-
-        const { actorLoss, criticLoss, predictionLoss } = await this.owm.learn(
-            targetValue - this.owm.lastStateValue,
-            targetValue,
-            nextStateVec,
-            this.lr
-        );
-
-        this.epsilon = Math.max(this.epsilonMin, this.epsilon * this.epsilonDecay);
-        const uncertaintyFactor = 1 + clamp(this.owm.predictionError, 0, 5) * 0.05;
-        this.epsilon = clamp(this.epsilon * uncertaintyFactor, this.epsilonMin, 1.0);
-        this.epsilon = Number.isFinite(this.epsilon) ? this.epsilon : this.epsilonMin;
-        this.temperature = clamp(this.temperature * 0.999, 0.5, 2.0);
-
-        this.memory.push({ state: stateVec, action: actionIndex, reward: totalReward, nextState: nextStateVec, done: isDone });
-        if (this.memory.length > this.memorySize) this.memory.shift();
-
-        // Log learning less frequently
-        if (this.stepCount % this.logFrequency === 0) {
-            logger.info(`StrategicAIAgent learned: actorLoss=${actorLoss.toFixed(3)}, criticLoss=${criticLoss.toFixed(3)}, predictionLoss=${predictionLoss.toFixed(3)}, epsilon=${this.epsilon.toFixed(3)}`);
-        }
     }
 }
 
@@ -413,6 +367,60 @@ export class StrategicAI {
         this.epsilonModulationRate = 0.005;
         this.learningRateModulationRate = 0.005;
         logger.info('StrategicAI constructed.');
+    }
+
+    async chooseAction(stateVec, gameState) {
+        if (!isFiniteVector(stateVec)) {
+            logger.warn('StrategicAI.chooseAction: Invalid state vector. Returning IDLE.');
+            return { action: 'IDLE', actionIndex: 3, F_qualia: 0 };
+        }
+
+        const sheaf = this.learningAI.owm.qualiaSheaf;
+        await sheaf.diffuseQualia(stateVec);
+        if (!sheaf.ready) {
+            logger.warn('StrategicAI.chooseAction: Sheaf not ready. Falling back to base agent.');
+            return await this.learningAI.makeDecision(gameState);
+        }
+
+        const { phi, h1Dimension, cup_product_intensity, inconsistency } = sheaf;
+        const F_qualia = Number.isFinite(phi) && Number.isFinite(h1Dimension) && Number.isFinite(cup_product_intensity) && Number.isFinite(inconsistency)
+            ? phi * h1Dimension * cup_product_intensity * (1 - inconsistency)
+            : 0;
+
+        const psi = await sheaf.computeHarmonicState();
+        if (!isFiniteVector(psi)) {
+            logger.warn('StrategicAI.chooseAction: Invalid harmonic state. Falling back to base agent.');
+            return await this.learningAI.makeDecision(gameState);
+        }
+
+        const qualiaInfluence = sheaf.mapQualiaToGame?.(stateVec, null) || new Float32Array(this.learningAI.actionDim).fill(0);
+        if (!isFiniteVector(qualiaInfluence)) {
+            logger.warn('StrategicAI.chooseAction: Invalid qualia influence. Using zeros.');
+            qualiaInfluence.fill(0);
+        }
+
+        const { action: baseAction, chosenActionIndex, activations } = await this.learningAI.makeDecision(gameState);
+        const qValues = await this.learningAI.owm.getQValues?.(stateVec) || new Float32Array(this.learningAI.actionDim).fill(0);
+        if (!isFiniteVector(qValues)) {
+            logger.warn('StrategicAI.chooseAction: Invalid Q-values. Returning base decision.');
+            return { action: baseAction, actionIndex: chosenActionIndex, F_qualia };
+        }
+
+        const gradF_qualia = qValues.map(q => Number.isFinite(q) && Number.isFinite(cup_product_intensity) && Number.isFinite(inconsistency)
+            ? q * cup_product_intensity * (1 - inconsistency)
+            : 0);
+        const scores = qValues.map((q, idx) => {
+            const psiDot = Number.isFinite(gradF_qualia[idx]) ? dot(psi, gradF_qualia[idx]) : 0;
+            return q + this.learningAI.epsilon * psiDot + qualiaInfluence[idx];
+        });
+
+        const actionIndexMod = scores.reduce((iMax, x, i) => Number.isFinite(x) && x > scores[iMax] ? i : iMax, 0);
+        const action = ['FORWARD', 'LEFT', 'RIGHT', 'IDLE'][actionIndexMod];
+
+        if (this.learningAI.stepCount % this.learningAI.logFrequency === 0) {
+            logger.info(`StrategicAI action=${action} (idx=${actionIndexMod}), F_qualia=${F_qualia.toFixed(4)}, phi=${phi.toFixed(3)}`);
+        }
+        return { action, actionIndex: actionIndexMod, F_qualia };
     }
 
     observe(reward) {
@@ -445,7 +453,6 @@ export class StrategicAI {
         this.learningAI.lr = Number.isFinite(this.learningAI.lr) ? this.learningAI.lr : 0.001;
         this.learningAI.epsilon = Number.isFinite(this.learningAI.epsilon) ? this.learningAI.epsilon : this.learningAI.epsilonMin;
 
-        // Log modulation less frequently
         if (this.learningAI.stepCount % this.learningAI.logFrequency === 0) {
             logger.info(`StrategicAI modulated: lr=${this.learningAI.lr.toFixed(5)}, epsilon=${this.learningAI.epsilon.toFixed(3)}`);
         }
