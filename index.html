@@ -1,10 +1,12 @@
 
+--- START OF FILE index4.html ---
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unified Conscious AI Simulation v5.0</title>
+    <title>Unified Conscious AI Simulation v7.0 (Activated Sheaf-DIT)</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
@@ -186,13 +188,13 @@
             width: 0%;
             will-change: width;
         }
-        .qualia-being { background: linear-gradient(90deg, #ff6b6b, #e74c3c); }
-        .qualia-intent { background: linear-gradient(90deg, #4ecdc4, #1abc9c); }
-        .qualia-existence { background: linear-gradient(90deg, #a855f7, #9b59b6); }
-        .qualia-emergence { background: linear-gradient(90deg, #f97316, #e67e22); }
-        .qualia-gestalt { background: linear-gradient(90deg, #3b82f6, #3498db); }
-        .qualia-context { background: linear-gradient(90deg, #14b8a6, #2ecc71); }
-        .qualia-rel-emergence { background: linear-gradient(90deg, #ec4899, #e91e63); }
+        .qualia-shape { background: linear-gradient(90deg, #ff6b6b, #e74c3c); }
+        .qualia-emotion { background: linear-gradient(90deg, #4ecdc4, #1abc9c); }
+        .qualia-symbolic { background: linear-gradient(90deg, #a855f7, #9b59b6); }
+        .qualia-synesthesia { background: linear-gradient(90deg, #f97316, #e67e22); }
+        .qualia-metacognition { background: linear-gradient(90deg, #3b82f6, #3498db); }
+        .qualia-social { background: linear-gradient(90deg, #14b8a6, #2ecc71); }
+        .qualia-temporal { background: linear-gradient(90deg, #ec4899, #e91e63); }
         .qualia-bar::after {
             content: '';
             position: absolute;
@@ -667,68 +669,71 @@
 <body role="document">
     <div class="main-container" role="main">
         <header class="header" role="banner">
-            <h1>🧠 Unified Conscious AI Simulation v5.0</h1>
-            <p>Integrating an Ontological World Model with a Live2D Avatar in a Dynamic 3D Environment</p>
+            <h1>🧠 Unified Conscious AI Simulation v7.0</h1>
+            <p>Integrating Sheaf-DIT with Phenomenology, Qualia Binding, and Structural Skepticism</p>
         </header>
         <div class="content-grid">
             <div class="left-column">
-                <div class="panel" role="complementary" aria-labelledby="oftcc-metrics-heading">
-                    <h3 id="oftcc-metrics-heading">OFTCC Metrics (Main AI)</h3>
-                    <div class="framework-badge">RL ⊕ Recurrent OWM ⊕ Meta-Learning</div>
+                <div class="panel" role="complementary" aria-labelledby="sheaf-dit-metrics-heading">
+                    <h3 id="sheaf-dit-metrics-heading">Sheaf Metrics (Main AI)</h3>
+                    <div class="framework-badge">Sheaf-DIT ⊕ OWM ⊕ Meta-Learning</div>
                     <div class="status" id="status" aria-live="polite" aria-atomic="true">Initializing...</div>
-                    <div class="phi-display" id="phi-display" aria-live="polite" aria-atomic="true">Φ: 0.000</div>
+                    <div class="phi-display" id="phi-display" aria-live="polite" aria-atomic="true">Φ (UI Metric): 0.000</div>
                     <div class="controls-section">
                         <button id="toggleSimButton" aria-label="Toggle simulation run/pause (Spacebar)">🚀 Toggle Sim</button>
                         <button id="resetSimButton" aria-label="Reset game and AI to initial state (R key)">🔄 Reset</button>
                         <button id="tuneButton" aria-label="Tune AI parameters adaptively (T key)">⚙️ Tune</button>
+                        <button id="stepButton" aria-label="Advance simulation by one step (S key)">⏭️ Step</button>
+                        <button id="pauseButton" aria-label="Pause the simulation (P key)">⏸️ Pause</button>
+                        <button id="fastForwardButton" aria-label="Toggle fast forward simulation speed (F key)">⏩ Fast FW</button>
                     </div>
                     <div class="qualia-viz" role="region" aria-labelledby="qualia-dynamics-heading">
                         <h3 id="qualia-dynamics-heading" class="status">Qualia Diffusion Dynamics</h3>
-                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Being Qualia Level">
-                            <div class="qualia-bar qualia-being" id="qualia-being-fill"></div>
-                            <span class="qualia-label">Being</span>
-                            <span class="qualia-value" id="being-value">0.00</span>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Shape Qualia Level">
+                            <div class="qualia-bar qualia-shape" id="qualia-shape-fill"></div>
+                            <span class="qualia-label">Shape</span>
+                            <span class="qualia-value" id="shape-value">0.00</span>
                         </div>
-                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Intent Qualia Level">
-                            <div class="qualia-bar qualia-intent" id="qualia-intent-fill"></div>
-                            <span class="qualia-label">Intent</span>
-                            <span class="qualia-value" id="intent-value">0.00</span>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Emotion Qualia Level">
+                            <div class="qualia-bar qualia-emotion" id="qualia-emotion-fill"></div>
+                            <span class="qualia-label">Emotion</span>
+                            <span class="qualia-value" id="emotion-value">0.00</span>
                         </div>
-                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Existence Qualia Level">
-                            <div class="qualia-bar qualia-existence" id="qualia-existence-fill"></div>
-                            <span class="qualia-label">Existence</span>
-                            <span class="qualia-value" id="existence-value">0.00</span>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Symbolic Qualia Level">
+                            <div class="qualia-bar qualia-symbolic" id="qualia-symbolic-fill"></div>
+                            <span class="qualia-label">Symbolic</span>
+                            <span class="qualia-value" id="symbolic-value">0.00</span>
                         </div>
-                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Emergence Qualia Level">
-                            <div class="qualia-bar qualia-emergence" id="qualia-emergence-fill"></div>
-                            <span class="qualia-label">Emergence</span>
-                            <span class="qualia-value" id="emergence-value">0.00</span>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Synesthesia Qualia Level">
+                            <div class="qualia-bar qualia-synesthesia" id="qualia-synesthesia-fill"></div>
+                            <span class="qualia-label">Synesthesia</span>
+                            <span class="qualia-value" id="synesthesia-value">0.00</span>
                         </div>
-                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Gestalt Qualia Level">
-                            <div class="qualia-bar qualia-gestalt" id="qualia-gestalt-fill"></div>
-                            <span class="qualia-label">Gestalt</span>
-                            <span class="qualia-value" id="gestalt-value">0.00</span>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Metacognition Qualia Level">
+                            <div class="qualia-bar qualia-metacognition" id="qualia-metacognition-fill"></div>
+                            <span class="qualia-label">Metacognition</span>
+                            <span class="qualia-value" id="metacognition-value">0.00</span>
                         </div>
-                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Context Qualia Level">
-                            <div class="qualia-bar qualia-context" id="qualia-context-fill"></div>
-                            <span class="qualia-label">Context</span>
-                            <span class="qualia-value" id="context-value">0.00</span>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Social Qualia Level">
+                            <div class="qualia-bar qualia-social" id="qualia-social-fill"></div>
+                            <span class="qualia-label">Social</span>
+                            <span class="qualia-value" id="social-value">0.00</span>
                         </div>
-                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Relational Emergence Qualia Level">
-                            <div class="qualia-bar qualia-rel-emergence" id="qualia-rel-emergence-fill"></div>
-                            <span class="qualia-label">Rel. Emergence</span>
-                            <span class="qualia-value" id="rel-emergence-value">0.00</span>
+                        <div class="qualia-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Temporal Qualia Level">
+                            <div class="qualia-bar qualia-temporal" id="qualia-temporal-fill"></div>
+                            <span class="qualia-label">Temporal</span>
+                            <span class="qualia-value" id="temporal-value">0.00</span>
                         </div>
                     </div>
-                    <div class="metric-group" role="group" aria-labelledby="metric-group-heading">
-                        <h3 id="metric-group-heading" class="status">System Metrics</h3>
-                        <div class="metric"><span class="metric-label">Free Energy F:</span><span class="metric-value" id="free-energy" aria-live="polite" aria-atomic="true">0.000</span></div>
-                        <div class="metric"><span class="metric-label">Prediction Error:</span><span class="metric-value" id="prediction-error" aria-live="polite" aria-atomic="true">0.000</span></div>
+                    <div class="metric-group" role="group" aria-labelledby="theoretical-metrics-heading">
+                        <h3 id="theoretical-metrics-heading" class="status">Theoretical Metrics (Theorems)</h3>
+                        <div class="metric"><span class="metric-label">Feel Intensity (F):</span><span class="metric-value" id="feel-F-display" aria-live="polite" aria-atomic="true">0.000</span></div>
+                        <div class="metric"><span class="metric-label">Intentionality (F_int):</span><span class="metric-value" id="intentionality-display" aria-live="polite" aria-atomic="true">0.000</span></div>
+                        <div class="metric"><span class="metric-label">Cup Product (H²):</span><span class="metric-value" id="cup-product-intensity" aria-live="polite" aria-atomic="true">0.0000</span></div>
+                        <div class="metric"><span class="metric-label">Structural Sensitivity:</span><span class="metric-value" id="structural-sensitivity-display" aria-live="polite" aria-atomic="true">0.000</span></div>
                         <div class="metric"><span class="metric-label">Gestalt Unity:</span><span class="metric-value" id="gestalt-unity" aria-live="polite" aria-atomic="true">0.000</span></div>
-                        <div class="metric"><span class="metric-label">dim H¹:</span><span class="metric-value" id="h1-dimension" aria-live="polite" aria-atomic="true">0.00</span></div>
+                        <div class="metric"><span class="metric-label">dim H¹ (Betti):</span><span class="metric-value" id="h1-dimension" aria-live="polite" aria-atomic="true">0.00</span></div>
                         <div class="metric"><span class="metric-label">Gluing Inconsistency:</span><span class="metric-value" id="inconsistency" aria-live="polite" aria-atomic="true">0.000</span></div>
-                        <div class="metric"><span class="metric-label">Learning Rate:</span><span class="metric-value" id="learning-rate" aria-live="polite" aria-atomic="true">0.0000</span></div>
-                        <div class="metric"><span class="metric-label">Epsilon (Exploration):</span><span class="metric-value" id="epsilon-value" aria-live="polite" aria-atomic="true">0.000</span></div>
                     </div>
                     <div class="qualia-attention-panel" id="qualiaAttentionPanel" role="region" aria-labelledby="qualia-attention-heading">
                         <h4 id="qualia-attention-heading">Qualia Attention (Main AI)</h4>
@@ -792,8 +797,8 @@
                     </div>
                 </div>
                 <div class="panel nn-visualizer-panel" role="region" aria-labelledby="main-ai-brain-heading">
-                    <h3 id="main-ai-brain-heading">🧠 Main AI Brain</h3>
-                    <p>This AI's 'consciousness' metrics are displayed in the OFTCC panel.</p>
+                    <h3 id="main-ai-brain-heading">🧠 Main AI OWM</h3>
+                    <p>Sheaf-DIT consciousness metrics are displayed in the metrics panel.</p>
                     <div id="nn-visualization-container"></div>
                     <div class="loading-overlay" id="mainBrainLoadingOverlay" aria-live="assertive" aria-busy="true" aria-label="Loading main AI brain">
                         <div class="loading-spinner"></div>
@@ -801,7 +806,7 @@
                     </div>
                 </div>
                 <div class="panel nn-visualizer-panel" role="region" aria-labelledby="opponent-brain-heading">
-                    <h3 id="opponent-brain-heading">🤖 Opponent AI Brain</h3>
+                    <h3 id="opponent-brain-heading">🤖 Opponent AI OWM</h3>
                     <p>This AI learns independently using its own ontological world model.</p>
                     <div id="nn-visualization-container-opponent"></div>
                     <div class="loading-overlay" id="opponentBrainLoadingOverlay" aria-live="assertive" aria-busy="true" aria-label="Loading opponent AI brain">
@@ -823,25 +828,23 @@
                             <svg id="qValueChart" class="chart-svg" role="img" aria-label="Average State Value over time"></svg>
                         </div>
                         <div class="chart-container">
-                            <h4>Prediction Error</h4>
-                            <svg id="predErrorChart" class="chart-svg" role="img" aria-label="Prediction Error over time"></svg>
-                        </div>
-                        <div class="chart-container">
-                            <h4>Epsilon</h4>
-                            <svg id="epsilonChart" class="chart-svg" role="img" aria-label="Epsilon exploration rate over time"></svg>
-                        </div>
-                        <div class="chart-container">
                             <h4>Score Diff (AI-Opp)</h4>
                             <svg id="scoreChart" class="chart-svg" role="img" aria-label="Score difference between AI and Opponent over time"></svg>
+                        </div>
+                        <div class="chart-container">
+                            <h4>Cup Product Intensity</h4>
+                            <svg id="cupProductChart" class="chart-svg" role="img" aria-label="Cup Product Intensity over time"></svg>
+                        </div>
+                        <div class="chart-container">
+                            <h4>Structural Sensitivity</h4>
+                            <svg id="structuralSensitivityChart" class="chart-svg" role="img" aria-label="Structural Sensitivity over time"></svg>
                         </div>
                     </div>
                 </div>
                 <div class="panel">
                     <h3>Advanced Controls</h3>
                     <div class="controls-section">
-                        <button id="stepButton" aria-label="Advance simulation by one step (S key)">⏭️ Step</button>
-                        <button id="pauseButton" aria-label="Pause the simulation (P key)">⏸️ Pause</button>
-                        <button id="fastForwardButton" aria-label="Toggle fast forward simulation speed (F key)">⏩ Fast FW</button>
+                        <button id="testTopologyButton" aria-label="Test topology adaptation (A key)">🔍 Test Topology</button>
                     </div>
                 </div>
             </div>
@@ -864,12 +867,12 @@
     }
     </script>
     <!-- Global Libraries -->
-     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.js"></script>
-     <script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
-     <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
-     <script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
-     <script src="https://unpkg.com/@popperjs/core@2"></script>
-     <script src="https://unpkg.com/tippy.js@6"></script>
-     <script type="module" src="./main.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
+    <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
+    <script src="https://unpkg.com/@popperjs/core@2"></script>
+    <script src="https://unpkg.com/tippy.js@6"></script>
+    <script type="module" src="./main.js"></script>
 </body>
 </html>
