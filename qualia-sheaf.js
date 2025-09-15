@@ -137,6 +137,9 @@ export class EnhancedQualiaSheaf {
         logger.info(`Enhanced Qualia Sheaf constructed: vertices=${this.graph.vertices.length}, edges=${this.graph.edges.length}, triangles=${this.simplicialComplex.triangles.length}, tetrahedra=${this.simplicialComplex.tetrahedra.length}`);
     }
 
+    // --- START OF FILE qualia-sheaf.js ---
+// ... (rest of file) ...
+
     _initializeGraph(graphData) {
         if (!graphData || typeof graphData !== 'object') {
             graphData = {};
@@ -166,36 +169,61 @@ export class EnhancedQualiaSheaf {
         explicitTetrahedra.forEach(tet => tet.forEach(v => allVerticesSet.add(v)));
         const finalVertices = Array.from(allVerticesSet);
 
-        const allEdgesSet = new Set(initialBaseEdges.map(e => e.slice(0, 2).sort().join(',')));
-        
-        let finalTrianglesUpdated = [...explicitTriangles];
+        // --- FIX: Build a comprehensive edgeSet by combining all sources ---
+        const comprehensiveEdgesSet = new Set();
+
+        // 1. Add all initial base edges
+        initialBaseEdges.forEach(e => {
+            if (Array.isArray(e) && e.length >= 2) {
+                comprehensiveEdgesSet.add(e.slice(0, 2).sort().join(','));
+            } else {
+                logger.warn(`_initializeGraph: Malformed initialBaseEdge skipped: ${JSON.stringify(e)}`);
+            }
+        });
+
+        // 2. Derive all triangles, including those from tetrahedra faces
+        let allDerivedTriangles = [...explicitTriangles]; // Start with explicit triangles
         explicitTetrahedra.forEach(tet => {
-            if (!Array.isArray(tet) || tet.length !== 4) return;
+            if (!Array.isArray(tet) || tet.length !== 4) {
+                 logger.warn(`_initializeGraph: Malformed explicitTetrahedra skipped: ${JSON.stringify(tet)}`);
+                 return;
+            }
+            // Generate all 4 faces of the tetrahedron
             for (let i = 0; i < 4; i++) {
                 const newTri = tet.filter((_, idx) => idx !== i).sort();
-                if (!finalTrianglesUpdated.some(t => t.slice().sort().join(',') === newTri.join(','))) {
-                    finalTrianglesUpdated.push(newTri);
+                // Add if not already present
+                if (!allDerivedTriangles.some(t => t.slice().sort().join(',') === newTri.join(','))) {
+                    allDerivedTriangles.push(newTri);
                 }
             }
         });
+        
+        // Filter out any non-3-element triangles that might have crept in
+        allDerivedTriangles = allDerivedTriangles.filter(t => Array.isArray(t) && t.length === 3);
 
-        finalTrianglesUpdated.forEach(tri => {
-            if (!Array.isArray(tri) || tri.length !== 3) return;
-            for (let i = 0; i < 3; i++) {
-                allEdgesSet.add([tri[i], tri[(i + 1) % 3]].sort().join(','));
+        // 3. Add all edges from all derived triangles
+        allDerivedTriangles.forEach(tri => {
+            // No need for Array.isArray(tri) check here if filtered above, but good for robustness
+            if (tri.length !== 3) {
+                 logger.warn(`_initializeGraph: Malformed triangle in allDerivedTriangles skipped for edge generation: ${JSON.stringify(tri)}`);
+                 return;
             }
+            comprehensiveEdgesSet.add([tri[0], tri[1]].sort().join(','));
+            comprehensiveEdgesSet.add([tri[1], tri[2]].sort().join(','));
+            comprehensiveEdgesSet.add([tri[2], tri[0]].sort().join(','));
         });
 
+        // Now, this.graph.edges should be built from this comprehensive set
         this.graph = {
             vertices: finalVertices,
-            edges: Array.from(allEdgesSet).map(s => s.split(',').concat([0.5]))
+            edges: Array.from(comprehensiveEdgesSet).map(s => s.split(',').concat([0.5]))
         };
         this.simplicialComplex = {
-            triangles: finalTrianglesUpdated.filter(t => t.length === 3),
-            tetrahedra: explicitTetrahedra.filter(t => t.length === 4)
+            triangles: allDerivedTriangles, // Use the now complete and filtered list
+            tetrahedra: explicitTetrahedra.filter(t => t.length === 4) // Ensure only valid tetrahedra
         };
-        this.edgeSet = allEdgesSet;
-    }
+        this.edgeSet = comprehensiveEdgesSet; // Assign the comprehensive set here
+
     
     _initializeStalks() {
         this.graph.vertices.forEach(v => {
@@ -1841,3 +1869,4 @@ export class EnhancedQualiaSheaf {
 }
 
 export default EnhancedQualiaSheaf;
+
