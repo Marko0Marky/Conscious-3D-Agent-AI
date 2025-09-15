@@ -1118,6 +1118,7 @@ export class EnhancedQualiaSheaf {
         return this.gestaltUnity;
     }
     
+
     _computeLogDet(A) {
         const n = A.length;
         if (n === 0) return 0;
@@ -1125,6 +1126,12 @@ export class EnhancedQualiaSheaf {
         const L = zeroMatrix(n, n);
         const U = zeroMatrix(n, n);
         for (let i = 0; i < n; i++) L[i][i] = 1;
+
+        // NOTE: Regularization for 'A' should ideally be applied *before*
+        // this function is called, to the covariance matrix itself.
+        // This function should now focus purely on the LU decomposition
+        // given a (hopefully) well-conditioned matrix.
+        // Removed the temporary A[i][i] += regularization from here.
 
         for (let i = 0; i < n; i++) {
             for (let j = i; j < n; j++) {
@@ -1139,8 +1146,11 @@ export class EnhancedQualiaSheaf {
                 for (let k = 0; k < i; k++) {
                     sum -= L[j][k] * U[k][i];
                 }
-                if (Math.abs(U[i][i]) < this.eps) {
-                    logger.warn(`Sheaf._computeLogDet: Near-singular matrix at i=${i}`);
+                const U_ii_abs = Math.abs(U[i][i]);
+                // FIX: Use a tighter epsilon here, as regularization is now expected from outside
+                // If it's still very small, it means something is deeply wrong or the matrix is fundamentally singular.
+                if (U_ii_abs < this.eps * 10) { // Slightly stricter threshold for division
+                    logger.warn(`Sheaf._computeLogDet: Division by near-zero diagonal element in U at i=${i}. Returning 0 for log-det.`);
                     return 0;
                 }
                 L[j][i] = sum / U[i][i];
@@ -1149,11 +1159,13 @@ export class EnhancedQualiaSheaf {
 
         let logDet = 0;
         for (let i = 0; i < n; i++) {
-            if (Math.abs(U[i][i]) < this.eps) {
-                logger.warn(`Sheaf._computeLogDet: Singular matrix detected`);
-                return 0;
+            const U_ii = U[i][i];
+            // FIX: Ensure U_ii is positive and sufficiently large for Math.log
+            if (!Number.isFinite(U_ii) || U_ii <= this.eps * 10) { // Check for non-finite or near-zero after computation
+                logger.warn(`Sheaf._computeLogDet: Non-finite or non-positive diagonal element for log-det at i=${i}. Returning 0.`);
+                return 0; // Treat as singular for log-det calculation
             }
-            logDet += Math.log(Math.abs(U[i][i]));
+            logDet += Math.log(U_ii);
         }
         return logDet;
     }
@@ -1166,58 +1178,83 @@ export class EnhancedQualiaSheaf {
                 logger.warn(`Sheaf.computeIntegratedInformation: Insufficient valid states (${validStates.length}/${this.windowSize}). Setting MI to 0.`);
                 MI = 0;
             } else {
-                const tfVersion = tf?.version?.core || '0.0.0';
-                const useTF = tf && parseFloat(tfVersion) >= 2.0 && tf.linalg?.determinant;
-                if (useTF) {
-                    try {
-                        const statesArray = validStates.map(s => Array.from(s));
-                        if (!statesArray.every(s => isFiniteVector(s))) {
-                            throw new Error("Non-finite states detected in TensorFlow input.");
-                        }
-                        const statesTensor = tf.tensor2d(statesArray);
-                        const covMatrix = tf.matMul(statesTensor.transpose(), statesTensor).div(statesTensor.shape[0]);
-                        let logDet;
+                const n_dim = validStates[0].length; // Dimension of the state vectors
+                const num_samples = validStates.length;
+
+                // FIX: If not enough samples for a non-singular covariance matrix, return 0 for MI
+                if (num_samples <= n_dim) { // Need at least n_dim + 1 samples for full rank
+                    logger.warn(`Sheaf.computeIntegratedInformation: Insufficient unique samples (${num_samples}) for state dimension (${n_dim}). MI set to 0.`);
+                    MI = 0;
+                } else { // Proceed only if enough samples for a potentially non-singular matrix
+                    const tfVersion = tf?.version?.core || '0.0.0';
+                    const useTF = tf && parseFloat(tfVersion) >= 2.0 && tf.linalg?.determinant;
+                    if (useTF) {
                         try {
-                            const L = tf.linalg.cholesky(covMatrix);
-                            logDet = tf.sum(L.log().mul(2)).dataSync()[0];
-                        } catch (e) {
-                            logger.warn(`Sheaf.computeIntegratedInformation: Cholesky failed; trying determinant: ${e.message}`);
-                            logDet = tf.linalg.determinant(covMatrix).log().dataSync()[0];
-                        }
-                        MI = Number.isFinite(logDet) ? 0.1 * Math.abs(logDet) + this.eps : 0;
-                        tf.dispose([statesTensor, covMatrix, L]);
-                    } catch (e) {
-                        logger.warn(`Sheaf.computeIntegratedInformation: TensorFlow.js failed: ${e.message}`, { stack: e.stack });
-                    }
-                }
-
-                if (MI === 0) {
-                    const n = validStates[0].length;
-                    const mean = new Float32Array(n).fill(0);
-                    validStates.forEach(state => {
-                        for (let i = 0; i < n; i++) mean[i] += state[i] / validStates.length;
-                    });
-                    const covMatrix = zeroMatrix(n, n);
-                    validStates.forEach(state => {
-                        const centered = vecSub(state, mean);
-                        for (let i = 0; i < n; i++) {
-                            for (let j = i; j < n; j++) {
-                                covMatrix[i][j] += centered[i] * centered[j] / (validStates.length - 1);
-                                if (i !== j) covMatrix[j][i] = covMatrix[i][j];
+                            const statesArray = validStates.map(s => Array.from(s));
+                            if (!statesArray.every(s => isFiniteVector(s))) {
+                                throw new Error("Non-finite states detected in TensorFlow input.");
                             }
+                            const statesTensor = tf.tensor2d(statesArray);
+                            // FIX: Add small regularization to covariance matrix before Cholesky/Determinant
+                            const regularizer = tf.eye(n_dim).mul(this.eps * 100); // Use a slightly larger regularization for TF
+                            const rawCovMatrix = tf.matMul(statesTensor.transpose(), statesTensor).div(num_samples);
+                            const covMatrix = rawCovMatrix.add(regularizer);
+                            
+                            let logDet;
+                            try {
+                                const L = tf.linalg.cholesky(covMatrix);
+                                logDet = tf.sum(L.log().mul(2)).dataSync()[0];
+                            } catch (e) {
+                                logger.warn(`Sheaf.computeIntegratedInformation: TensorFlow Cholesky failed even after regularization; trying logMatrixDeterminant: ${e.message}`);
+                                logDet = tf.linalg.logMatrixDeterminant(covMatrix).logDeterminant.dataSync()[0];
+                            }
+                            MI = Number.isFinite(logDet) ? 0.1 * Math.abs(logDet) + this.eps : 0;
+                            tf.dispose([statesTensor, rawCovMatrix, covMatrix, L]);
+                        } catch (e) {
+                            logger.warn(`Sheaf.computeIntegratedInformation: TensorFlow.js failed after regularization attempts: ${e.message}`, { stack: e.stack });
                         }
-                    });
-                    if (isFiniteMatrix(covMatrix)) {
-                        MI = 0.1 * Math.abs(this._computeLogDet(covMatrix)) + this.eps;
                     }
-                }
 
-                if (MI === 0) {
+                    if (MI === 0) { // Fallback to CPU calculation if TF failed or not used
+                        const mean = new Float32Array(n_dim).fill(0);
+                        validStates.forEach(state => {
+                            for (let i = 0; i < n_dim; i++) mean[i] += state[i] / num_samples;
+                        });
+                        const covMatrix = zeroMatrix(n_dim, n_dim);
+                        validStates.forEach(state => {
+                            const centered = vecSub(state, mean);
+                            for (let i = 0; i < n_dim; i++) {
+                                for (let j = i; j < n_dim; j++) {
+                                    covMatrix[i][j] += centered[i] * centered[j] / (num_samples - 1);
+                                    if (i !== j) covMatrix[j][i] = covMatrix[i][j];
+                                }
+                            }
+                        });
+
+                        // FIX: Add regularization to the CPU-computed covariance matrix *before* passing to _computeLogDet
+                        if (isFiniteMatrix(covMatrix)) {
+                            const regularizedCovMatrix = covMatrix.map((row, i) =>
+                                new Float32Array(row.map((val, j) => (i === j) ? (val + this.eps * 100) : val))
+                            );
+                            if (isFiniteMatrix(regularizedCovMatrix)) {
+                                MI = 0.1 * Math.abs(this._computeLogDet(regularizedCovMatrix)) + this.eps;
+                            } else {
+                                logger.warn('Sheaf.computeIntegratedInformation: Regularized CPU covariance matrix is non-finite. MI set to 0.');
+                                MI = 0;
+                            }
+                        } else {
+                            logger.warn('Sheaf.computeIntegratedInformation: Non-finite raw CPU covariance matrix generated. MI set to 0.');
+                            MI = 0;
+                        }
+                    }
+                } // End if (num_samples <= n_dim) else block
+
+                if (MI === 0) { // Final fallback to KSG worker if all else fails
                     logger.info('Sheaf.computeIntegratedInformation: Falling back to KSG worker.');
                     const ksgMI = await runWorkerTask('ksgMutualInformation', { states: validStates, k: 3 }, 20000);
                     MI = Number.isFinite(ksgMI) ? ksgMI : 0;
                 }
-            }
+            } // End if (validStates.length < this.windowSize / 4) else block
         } catch (e) {
             logger.error(`Sheaf.computeIntegratedInformation: Error computing MI: ${e.message}`, { stack: e.stack });
             MI = 0;
@@ -1225,10 +1262,10 @@ export class EnhancedQualiaSheaf {
 
         const phiRaw = Math.log(1 + Math.abs(MI)) * this.stability * this.gestaltUnity * Math.exp(-this.inconsistency) * (1 + 0.05 * this.h1Dimension);
         this.phi = clamp(phiRaw, 0, 100);
-        // FIX: Push scalar wrapped in Float32Array to CircularBuffer
         this.phiHistory.push(new Float32Array([this.phi]));
         return this.phi;
     }
+
     
     async computeCupProduct() {
         let totalIntensity = 0;
