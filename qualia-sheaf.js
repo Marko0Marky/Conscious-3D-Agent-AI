@@ -1,3 +1,5 @@
+// --- START OF FILE qualia-sheaf.js ---
+
 import {
     clamp, dot, norm2, vecAdd, vecSub, vecScale, vecZeros, zeroMatrix, isFiniteVector, isFiniteMatrix, flattenMatrix, unflattenMatrix, logDeterminantFromDiagonal,
     logger, runWorkerTask, identity
@@ -20,6 +22,7 @@ export class CircularBuffer {
     }
 
     push(item) {
+        // FIX: Ensure only Array or Float32Array items are pushed
         if (!item || !Array.isArray(item) && !(item instanceof Float32Array)) {
             console.warn('CircularBuffer.push: Invalid item. Skipping.', { item });
             return;
@@ -608,7 +611,6 @@ export class EnhancedQualiaSheaf {
 
     async buildBoundaryMatrices() {
         if (!this.graph.vertices.length) {
-            logger.warn('Sheaf.buildBoundaryMatrices: No vertices in graph. Returning empty boundary matrices.');
             return {
                 partial1: { flatData: new Float32Array(0), rows: 0, cols: 0 },
                 partial2: { flatData: new Float32Array(0), rows: 0, cols: 0 },
@@ -625,7 +627,7 @@ export class EnhancedQualiaSheaf {
         const nT = this.simplicialComplex.triangles.length;
         const nTet = this.simplicialComplex.tetrahedra.length;
 
-        const partial1 = zeroMatrix(nE, nV);
+        const boundary1 = zeroMatrix(nE, nV);
         let nonZeroCount1 = 0;
         this.graph.edges.forEach((edge, eIdx) => {
             const [u, v] = edge;
@@ -635,8 +637,8 @@ export class EnhancedQualiaSheaf {
                 logger.warn(`Sheaf.buildBoundaryMatrices: Invalid vertex index for edge ${u}-${v} (uIdx=${uIdx}, vIdx=${vIdx})`);
                 return;
             }
-            partial1[eIdx][uIdx] = 1;
-            partial1[eIdx][vIdx] = 1;
+            boundary1[eIdx][uIdx] = 1;
+            boundary1[eIdx][vIdx] = 1;
             nonZeroCount1 += 2;
         });
             
@@ -674,10 +676,38 @@ export class EnhancedQualiaSheaf {
             }
         });
 
+        // FIX: Updated safeFlatten to ensure consistent dimension reporting from flattenMatrix
+        const safeFlatten = (matrix, name) => {
+            if (!isFiniteMatrix(matrix)) {
+                logger.error(`Sheaf: Non-finite matrix for ${name} boundary detected BEFORE flattening. Returning empty.`, { matrix });
+                return { flatData: new Float32Array(0), rows: 0, cols: 0 };
+            }
+
+            const flattenedResult = flattenMatrix(matrix);
+
+            // Double check for non-finite values or length mismatches after flattening
+            if (!isFiniteVector(flattenedResult.flatData)) {
+                logger.error(`Sheaf: CRITICAL: flattenMatrix for ${name} boundary produced non-finite flatData! Returning empty.`, { flattenedResult });
+                const nonFiniteIndex = flattenedResult.flatData.findIndex(val => !Number.isFinite(val));
+                if (nonFiniteIndex !== -1) {
+                    logger.error(`Sheaf: Non-finite value at index ${nonFiniteIndex} in flatData for ${name}: ${flattenedResult.flatData[nonFiniteIndex]}`);
+                }
+                return { flatData: new Float32Array(0), rows: 0, cols: 0 };
+            }
+
+            if (flattenedResult.flatData.length !== flattenedResult.rows * flattenedResult.cols) {
+                logger.error(`Sheaf: CRITICAL: Flattened data length mismatch for ${name} boundary after flattening. Returning empty.`, { flattenedResult });
+                return { flatData: new Float32Array(0), rows: 0, cols: 0 };
+            }
+            
+            return flattenedResult;
+        };
+
+
         return {
-            partial1: { flatData: flattenMatrix(partial1), rows: nE, cols: nV },
-            partial2: { flatData: flattenMatrix(partial2), rows: nT, cols: nE },
-            partial3: { flatData: flattenMatrix(partial3), rows: nTet, cols: nT }
+            partial1: safeFlatten(boundary1, "boundary1"),
+            partial2: safeFlatten(partial2, "partial2"),
+            partial3: safeFlatten(partial3, "partial3")
         };
     }
 
@@ -1019,7 +1049,8 @@ export class EnhancedQualiaSheaf {
             }
         }
         this.inconsistency = edgeCount > 0 ? clamp(sum / edgeCount, 0, 10) : 0;
-        this.inconsistencyHistory.push(this.inconsistency);
+        // FIX: Push scalar wrapped in Float32Array to CircularBuffer
+        this.inconsistencyHistory.push(new Float32Array([this.inconsistency]));
         return this.inconsistency;
     }
 
@@ -1027,7 +1058,8 @@ export class EnhancedQualiaSheaf {
         const stalks = Array.from(this.stalks.values()).filter(isFiniteVector);
         if (stalks.length < 2) {
             this.gestaltUnity = 0;
-            this.gestaltHistory.push(this.gestaltUnity);
+            // FIX: Push scalar wrapped in Float32Array to CircularBuffer
+            this.gestaltHistory.push(new Float32Array([this.gestaltUnity]));
             return 0;
         }
 
@@ -1081,7 +1113,8 @@ export class EnhancedQualiaSheaf {
             }
         }
         this.gestaltUnity = count > 0 ? clamp(totalSimilarity / count, 0, 1) : 0;
-        this.gestaltHistory.push(this.gestaltUnity);
+        // FIX: Push scalar wrapped in Float32Array to CircularBuffer
+        this.gestaltHistory.push(new Float32Array([this.gestaltUnity]));
         return this.gestaltUnity;
     }
     
@@ -1192,7 +1225,8 @@ export class EnhancedQualiaSheaf {
 
         const phiRaw = Math.log(1 + Math.abs(MI)) * this.stability * this.gestaltUnity * Math.exp(-this.inconsistency) * (1 + 0.05 * this.h1Dimension);
         this.phi = clamp(phiRaw, 0, 100);
-        this.phiHistory.push(this.phi);
+        // FIX: Push scalar wrapped in Float32Array to CircularBuffer
+        this.phiHistory.push(new Float32Array([this.phi]));
         return this.phi;
     }
     
@@ -1312,44 +1346,71 @@ export class EnhancedQualiaSheaf {
         return this.h1Dimension;
     }
 
-    async _computeBetti1UnionFind() {
-        const nV = this.graph.vertices.length;
-        const nE = this.graph.edges.length;
-        
-        const parent = new Map(this.graph.vertices.map(v => [v, v]));
-        const rank = new Map(this.graph.vertices.map(v => [v, 0]));
-        
-        const find = (v) => {
-            if (parent.get(v) !== v) {
-                parent.set(v, find(parent.get(v)));
-            }
-            return parent.get(v);
-        };
-        
-        const union = (u, v) => {
-            const rootU = find(u);
-            const rootV = find(v);
-            if (rootU === rootV) return;
-            const rankU = rank.get(rootU);
-            const rankV = rank.get(rootV);
-            if (rankU < rankV) {
-                parent.set(rootU, rootV);
-            } else if (rankU > rankV) {
-                parent.set(rootV, rootU);
+        _buildIncidenceMatrix() {
+        const n = this.graph.vertices.length;
+        const m = this.graph.edges.length;
+        const matrix = Array(n).fill().map(() => Array(m).fill(0));
+        this.graph.edges.forEach(([u, v], j) => {
+            const uIdx = this.graph.vertices.indexOf(u);
+            const vIdx = this.graph.vertices.indexOf(v);
+            if (uIdx !== -1 && vIdx !== -1) {
+                matrix[uIdx][j] = 1;
+                matrix[vIdx][j] = -1;
             } else {
-                parent.set(rootV, rootU);
-                rank.set(rootU, rankU + 1);
+                logger.warn(`_buildIncidenceMatrix: Invalid edge [${u}, ${v}] at index ${j}. Skipping.`);
+            }
+        });
+        return matrix;
+    }
+
+    _computeBetti1UnionFind() {
+        const vertices = this.graph.vertices;
+        const edges = this.graph.edges;
+        const n = vertices.length;
+        const m = edges.length;
+
+        const parent = Array(n).fill().map((_, i) => i);
+        const rank = Array(n).fill(0);
+
+        const find = (x) => {
+            if (parent[x] !== x) {
+                parent[x] = find(parent[x]);
+            }
+            return parent[x];
+        };
+
+        const union = (x, y) => {
+            const px = find(x);
+            const py = find(y);
+            if (px === py) return;
+            if (rank[px] < rank[py]) {
+                parent[px] = py;
+            } else if (rank[px] > rank[py]) {
+                parent[py] = px;
+            } else {
+                parent[py] = px;
+                rank[px]++;
             }
         };
 
-        this.graph.edges.forEach(([u, v]) => {
-            union(u, v);
+        edges.forEach(([u, v], i) => {
+            const uIdx = vertices.indexOf(u);
+            const vIdx = vertices.indexOf(v);
+            if (uIdx === -1 || vIdx === -1) {
+                logger.warn(`Sheaf._computeBetti1UnionFind: Invalid edge [${u}, ${v}] at index ${i}. Skipping.`);
+                return;
+            }
+            union(uIdx, vIdx);
         });
 
-        const components = new Set(this.graph.vertices.map(v => find(v))).size;
-        const betti1 = nE - nV + components;
-        logger.info(`Sheaf._computeBetti1UnionFind: Computed β1=${betti1}, components=${components}`);
-        return betti1;
+        const components = new Set(parent.map((_, i) => find(i))).size;
+        const beta1 = Math.max(0, m - n + components);
+        if (beta1 > n) {
+            logger.warn(`Sheaf._computeBetti1UnionFind: Unrealistic β1=${beta1} for n=${n}. Capping at n.`);
+            return n;
+        }
+        logger.info(`Sheaf._computeBetti1UnionFind: Computed β1=${beta1}, components=${components}`);
+        return beta1;
     }
 
     async simulateDiffusionStep(s_t) {
@@ -1741,4 +1802,5 @@ export class EnhancedQualiaSheaf {
         this.ready = true;
     }
 }
+
 export default EnhancedQualiaSheaf;
