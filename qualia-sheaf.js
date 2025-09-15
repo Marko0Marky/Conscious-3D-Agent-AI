@@ -1,160 +1,118 @@
-// --- START OF FILE qualia-sheaf.js ---
-
 import {
     clamp, dot, norm2, vecAdd, vecSub, vecScale, vecZeros, zeroMatrix, isFiniteVector, isFiniteMatrix, flattenMatrix, unflattenMatrix, logDeterminantFromDiagonal,
     logger, runWorkerTask, identity
 } from './utils.js';
 
-// Research: Numeric.js for stable matrix operations (CDN: https://cdn.jsdelivr.net/npm/numeric@1.2.6/lib/numeric.min.js)
 const Numeric = window.Numeric || null;
-
-// Research: GPU.js for accelerated matrix computations (CDN: https://cdn.jsdelivr.net/npm/gpu.js@2.1.0/dist/gpu-browser.min.js)
 const GPU = window.gpu || null;
+const tf = window.tf || null;
+const THREE = window.THREE || null;
 
 /**
- * Represents an Enhanced Qualia Sheaf, a mathematical structure used to model the AI's "consciousness".
- * Phase 1B: Added tetrahedra support, sparse boundary operators, Betti-1 via GF(2) rank, dynamic edges.
- * Phase 2.1: Enhanced dynamic topology adaptation with correlation-based edge/simplex evolution.
- * Research Improvements: Numeric.js for stability, GPU.js for perf, bit-packed homology, contagion-based adaptation, sheaf cohomology for qualia binding.
+ * A circular buffer implementation for efficient storage of historical data.
  */
-export class EnhancedQualiaSheaf {
-    constructor(graphData, stateDim = 8, initialQDim = 7, alpha = 0.1, beta = 0.1, gamma = 0.05) {
-        this.owm = null; // OWM reference will be set after OWM is constructed using setOWM
-        this.stateDim = stateDim;
-        this.entityNames = ['being', 'intent', 'existence', 'emergence', 'gestalt', 'context', 'rel_emergence'];
-        this.qDim = this.entityNames.length; // Always 7
+export class CircularBuffer {
+    constructor(capacity) {
+        this.capacity = Math.max(1, Math.floor(Number.isFinite(capacity) ? capacity : 10));
+        this.buffer = new Array(this.capacity).fill(null);
+        this.start = 0;
+        this.size = 0;
+    }
 
-        const defaultVertices = ['agent_x', 'agent_z', 'agent_rot', 'target_x', 'target_z', 'vec_dx', 'vec_dz', 'dist_target'];
-        const initialGraphVertices = Array.isArray(graphData?.vertices) && graphData.vertices.length >= defaultVertices.length ? graphData.vertices : defaultVertices;
-
-        const initialBaseEdges = Array.isArray(graphData?.edges) ? graphData.edges.slice() : [
-            ['agent_x', 'agent_rot'], ['agent_z', 'agent_rot'],
-            ['agent_x', 'vec_dx'], ['agent_z', 'vec_dz'],
-            ['target_x', 'vec_dx'], ['target_z', 'vec_dz'],
-            ['vec_dx', 'dist_target'], ['vec_dz', 'dist_target']
-        ];
-
-        const explicitTriangles = Array.isArray(graphData?.triangles) ? graphData.triangles.slice() : [
-            ['agent_x', 'agent_z', 'agent_rot'],
-            ['target_x', 'target_z', 'dist_target'],
-            ['agent_x', 'target_x', 'vec_dx'],
-            ['agent_z', 'target_z', 'vec_dz']
-        ];
-
-        const explicitTetrahedra = Array.isArray(graphData?.tetrahedra) ? graphData.tetrahedra.slice() : [
-            ['agent_x', 'agent_z', 'target_x', 'target_z'],
-            ['agent_x', 'target_x', 'vec_dx', 'dist_target'],
-            ['agent_rot', 'vec_dx', 'vec_dz', 'dist_target']
-        ];
-
-        const allVerticesSet = new Set(initialGraphVertices);
-        explicitTriangles.forEach(triangle => {
-            if (!Array.isArray(triangle) || triangle.length !== 3) {
-                console.warn(`Sheaf: Invalid triangle in input: ${JSON.stringify(triangle)}. Skipping.`);
-                logger.warn(`Sheaf: Invalid triangle in input: ${JSON.stringify(triangle)}`);
-                return;
-            }
-            triangle.forEach(v => allVerticesSet.add(v));
-        });
-        explicitTetrahedra.forEach(tet => {
-            if (!Array.isArray(tet) || tet.length !== 4) {
-                console.warn(`Sheaf: Invalid tetrahedron in input: ${JSON.stringify(tet)}. Skipping.`);
-                logger.warn(`Sheaf: Invalid tetrahedron in input: ${JSON.stringify(tet)}`);
-                return;
-            }
-            tet.forEach(v => allVerticesSet.add(v));
-        });
-        const finalVertices = Array.from(allVerticesSet);
-
-        const allEdgesSet = new Set();
-        initialBaseEdges.forEach(edge => {
-            if (!Array.isArray(edge) || edge.length < 2) {
-                console.warn(`Sheaf: Invalid edge in input: ${JSON.stringify(edge)}. Skipping.`);
-                logger.warn(`Sheaf: Invalid edge in input: ${JSON.stringify(edge)}`);
-                return;
-            }
-            allEdgesSet.add(edge.slice(0, 2).sort().join(','));
-        });
-
-        let finalTrianglesUpdated = [...explicitTriangles];
-        let finalTetrahedraUpdated = [...explicitTetrahedra];
-
-        finalTetrahedraUpdated.forEach(tet => {
-            if (!Array.isArray(tet) || tet.length !== 4) {
-                console.warn(`Sheaf: Invalid tetrahedron: ${JSON.stringify(tet)}. Skipping face generation.`);
-                logger.warn(`Sheaf: Invalid tetrahedron: ${JSON.stringify(tet)}`);
-                return;
-            }
-            for (let i = 0; i < 4; i++) {
-                const newTri = tet.filter((_, idx) => idx !== i).sort();
-                const triStr = newTri.join(',');
-                if (!finalTrianglesUpdated.some(t => t.slice().sort().join(',') === triStr)) {
-                    finalTrianglesUpdated.push(newTri);
-                }
-            }
-        });
-
-        finalTrianglesUpdated.forEach(tri => {
-            if (!Array.isArray(tri) || tri.length !== 3) {
-                console.warn(`Sheaf: Invalid triangle: ${JSON.stringify(tri)}. Skipping edge generation.`);
-                logger.warn(`Sheaf: Invalid triangle: ${JSON.stringify(tri)}`);
-                return;
-            }
-            for (let i = 0; i < 3; i++) {
-                const newEdge = [tri[i], tri[(i + 1) % 3]].sort();
-                const edgeStr = newEdge.join(',');
-                if (!allEdgesSet.has(edgeStr)) {
-                    allEdgesSet.add(edgeStr);
-                }
-            }
-        });
-        const finalEdges = Array.from(allEdgesSet).map(s => s.split(',').concat([0.5]));
-
-        this.graph = {
-            vertices: finalVertices,
-            edges: finalEdges
-        };
-        this.simplicialComplex = {
-            vertices: finalVertices,
-            edges: finalEdges,
-            triangles: finalTrianglesUpdated,
-            tetrahedra: finalTetrahedraUpdated
-        };
-
-        this.alpha = clamp(alpha, 0.01, 1);
-        this.beta = clamp(beta, 0.01, 1);
-        this.gamma = clamp(gamma, 0.01, 0.5);
-        this.eps = 1e-6;
-
-        this.stalks = new Map();
-        try {
-            this.graph.vertices.forEach(v => {
-                const stalk = new Float32Array(this.qDim).fill(0).map(() => clamp((Math.random() - 0.5) * 0.5, -1, 1));
-                if (!isFiniteVector(stalk)) {
-                    console.error(`ERROR: Non-finite stalk generated for vertex ${v} during Sheaf construction. Setting to zeros.`, stalk);
-                    logger.error(`Non-finite stalk generated for vertex ${v}; setting to zeros.`);
-                    stalk.fill(0);
-                }
-                if (v.includes('vec_') || v.includes('dist_')) stalk[2] = clamp(stalk[2] * 1.5, -1, 1);
-                this.stalks.set(v, stalk);
-            });
-        } catch (e) {
-            console.error('CRITICAL ERROR: Failed to initialize stalks in EnhancedQualiaSheaf constructor:', e);
-            logger.error('CRITICAL ERROR: Failed to initialize stalks in EnhancedQualiaSheaf constructor:', e);
-            this.ready = false;
-            throw e;
+    push(item) {
+        if (!item || !Array.isArray(item) && !(item instanceof Float32Array)) {
+            console.warn('CircularBuffer.push: Invalid item. Skipping.', { item });
+            return;
         }
+        const index = (this.start + this.size) % this.capacity;
+        this.buffer[index] = item;
+        if (this.size < this.capacity) {
+            this.size++;
+        } else {
+            this.start = (this.start + 1) % this.capacity;
+        }
+    }
 
+    get(index) {
+        if (index < 0 || index >= this.size) return null;
+        return this.buffer[(this.start + index) % this.capacity];
+    }
+    
+    getAll() {
+        const result = [];
+        for (let i = 0; i < this.size; i++) {
+            result.push(this.get(i));
+        }
+        return result;
+    }
 
-        this.correlationMatrix = zeroMatrix(this.graph.vertices.length, this.graph.vertices.length);
-        this.stalkHistory = [];
-        this.stalkHistorySize = 100;
+    [Symbol.iterator]() {
+        let index = 0;
+        const start = this.start;
+        const size = this.size;
+        const buffer = this.buffer;
+        const capacity = this.capacity;
+        return {
+            next() {
+                if (index >= size) {
+                    return { done: true };
+                }
+                const value = buffer[(start + index) % capacity];
+                index++;
+                return { value, done: false };
+            }
+        };
+    }
 
-        this.adjacencyMatrix = null;
-        this.laplacian = null;
-        this.maxEigApprox = 1;
-        this.projectionMatrices = new Map();
+    get length() {
+        return this.size;
+    }
+
+    clear() {
+        this.buffer.fill(null);
+        this.start = 0;
+        this.size = 0;
+    }
+}
+
+export class EnhancedQualiaSheaf {
+    constructor(graphData, config = {}) {
+        this.owm = null;
         this.ready = false;
+        this.entityNames = config.entityNames || ['shape', 'emotion', 'symbolic', 'synesthesia', 'metacognition', 'social', 'temporal'];
+        this.qDim = this.entityNames.length;
+        
+        this.stateDim = config.stateDim || 13;
+        
+        // Fix: Increase alpha for stronger input influence
+        this.alpha = clamp(config.alpha ?? 0.2, 0.01, 1);
+        this.beta = clamp(config.beta ?? 0.1, 0.01, 1);
+        this.gamma = clamp(config.gamma ?? 0.05, 0.01, 0.5);
+        this.sigma = clamp(config.sigma ?? 0.025, 0.001, 0.1);
+        this.eps = 1e-6;
+        
+        this.adaptation = {
+            addThresh: clamp(config.addThresh ?? 0.7, 0.5, 0.95),
+            removeThresh: clamp(config.removeThresh ?? 0.2, 0.05, 0.4),
+            targetH1: config.targetH1 ?? 2.0
+        };
+
+        this._initializeGraph(graphData);
+        this.stalks = new Map();
+        this._initializeStalks();
+        
+        this.stalkHistorySize = 100;
+        this.correlationMatrix = zeroMatrix(this.graph.vertices.length, this.graph.vertices.length);
+        this.stalkHistory = new CircularBuffer(this.stalkHistorySize);
+        
+        const N_total_stalk_dim = this.graph.vertices.length * this.qDim;
+        this.windowSize = Math.max(50, N_total_stalk_dim * 2);
+        this.windowedStates = new CircularBuffer(this.windowSize);
+        this._initializeWindowedStates(N_total_stalk_dim);
+        
+        this.phiHistory = new CircularBuffer(this.stalkHistorySize);
+        this.gestaltHistory = new CircularBuffer(this.stalkHistorySize);
+        this.inconsistencyHistory = new CircularBuffer(this.stalkHistorySize);
 
         this.phi = 0.2;
         this.h1Dimension = 0;
@@ -162,19 +120,100 @@ export class EnhancedQualiaSheaf {
         this.stability = 0.6;
         this.diffusionEnergy = 0;
         this.inconsistency = 0;
-        this.windowedStates = [];
-        const N_total_stalk_dim = this.graph.vertices.length * this.qDim;
-        this.windowSize = Math.max(50, N_total_stalk_dim * 2);
+        this.feel_F = 0;
+        this.intentionality_F = 0;
+        this.cup_product_intensity = 0;
+        this.structural_sensitivity = 0;
+        
+        this.adjacencyMatrix = null;
+        this.laplacian = null;
+        this.maxEigApprox = 1;
+        this.projectionMatrices = new Map();
+        this.isUpdating = false;
+
+        logger.info(`Enhanced Qualia Sheaf constructed: vertices=${this.graph.vertices.length}, edges=${this.graph.edges.length}, triangles=${this.simplicialComplex.triangles.length}, tetrahedra=${this.simplicialComplex.tetrahedra.length}`);
+    }
+
+    _initializeGraph(graphData) {
+        if (!graphData || typeof graphData !== 'object') {
+            graphData = {};
+        }
+
+        const defaultVertices = ['agent_x', 'agent_z', 'agent_rot', 'target_x', 'target_z', 'vec_dx', 'vec_dz', 'dist_target'];
+        const initialGraphVertices = Array.isArray(graphData.vertices) && graphData.vertices.length > 0 ? graphData.vertices : defaultVertices;
+        const initialBaseEdges = Array.isArray(graphData.edges) ? graphData.edges.slice() : [
+            ['agent_x', 'agent_rot'], ['agent_z', 'agent_rot'],
+            ['agent_x', 'vec_dx'], ['agent_z', 'vec_dz'],
+            ['target_x', 'vec_dx'], ['target_z', 'vec_dz'],
+            ['vec_dx', 'dist_target'], ['vec_dz', 'dist_target']
+        ];
+        const explicitTriangles = Array.isArray(graphData.triangles) ? graphData.triangles.slice() : [
+            ['agent_x', 'agent_z', 'agent_rot'],
+            ['target_x', 'target_z', 'dist_target'],
+            ['agent_x', 'target_x', 'vec_dx'],
+            ['agent_z', 'target_z', 'vec_dz']
+        ];
+        const explicitTetrahedra = Array.isArray(graphData.tetrahedra) ? graphData.tetrahedra.slice() : [
+            ['agent_x', 'agent_z', 'target_x', 'target_z'],
+            ['agent_rot', 'vec_dx', 'vec_dz', 'dist_target']
+        ];
+
+        const allVerticesSet = new Set(initialGraphVertices);
+        explicitTriangles.forEach(tri => tri.forEach(v => allVerticesSet.add(v)));
+        explicitTetrahedra.forEach(tet => tet.forEach(v => allVerticesSet.add(v)));
+        const finalVertices = Array.from(allVerticesSet);
+
+        const allEdgesSet = new Set(initialBaseEdges.map(e => e.slice(0, 2).sort().join(',')));
+        
+        let finalTrianglesUpdated = [...explicitTriangles];
+        explicitTetrahedra.forEach(tet => {
+            if (!Array.isArray(tet) || tet.length !== 4) return;
+            for (let i = 0; i < 4; i++) {
+                const newTri = tet.filter((_, idx) => idx !== i).sort();
+                if (!finalTrianglesUpdated.some(t => t.slice().sort().join(',') === newTri.join(','))) {
+                    finalTrianglesUpdated.push(newTri);
+                }
+            }
+        });
+
+        finalTrianglesUpdated.forEach(tri => {
+            if (!Array.isArray(tri) || tri.length !== 3) return;
+            for (let i = 0; i < 3; i++) {
+                allEdgesSet.add([tri[i], tri[(i + 1) % 3]].sort().join(','));
+            }
+        });
+
+        this.graph = {
+            vertices: finalVertices,
+            edges: Array.from(allEdgesSet).map(s => s.split(',').concat([0.5]))
+        };
+        this.simplicialComplex = {
+            triangles: finalTrianglesUpdated.filter(t => t.length === 3),
+            tetrahedra: explicitTetrahedra.filter(t => t.length === 4)
+        };
+        this.edgeSet = allEdgesSet;
+    }
+    
+    _initializeStalks() {
+        this.graph.vertices.forEach(v => {
+            const stalk = new Float32Array(this.qDim).fill(0).map(() => clamp((Math.random() - 0.5) * 0.5, -1, 1));
+            if (!isFiniteVector(stalk)) {
+                logger.error(`Non-finite stalk for vertex ${v}; setting to zeros.`);
+                stalk.fill(0);
+            }
+            if (v.includes('vec_') || v.includes('dist_')) stalk[2] = clamp(stalk[2] * 1.5, -1, 1);
+            this.stalks.set(v, stalk);
+        });
+    }
+
+    _initializeWindowedStates(N_total_stalk_dim) {
         for (let i = 0; i < this.windowSize; i++) {
             const randomState = new Float32Array(N_total_stalk_dim).fill(0).map(() => clamp((Math.random() - 0.5) * 0.1, -1, 1));
             if (!isFiniteVector(randomState)) {
-                console.error('ERROR: Non-finite random state generated for windowedStates in Sheaf constructor. Setting to zeros.', randomState);
-                logger.error('Non-finite random state generated for windowedStates; setting to zeros.');
                 randomState.fill(0);
             }
             this.windowedStates.push(randomState);
         }
-        logger.info(`Enhanced Qualia Sheaf constructed: vertices=${this.graph.vertices.length}, edges=${this.graph.edges.length}, triangles=${this.simplicialComplex.triangles.length}, tetrahedra=${this.simplicialComplex.tetrahedra.length}`);
     }
 
     setOWM(owmInstance) {
@@ -187,61 +226,75 @@ export class EnhancedQualiaSheaf {
     }
 
     getStalksAsVector() {
-        const numVertices = this.graph.vertices.length;
-        const flatStalks = new Float32Array(numVertices * this.qDim);
-        let offset = 0;
-        for (const vertexName of this.graph.vertices) {
-            const stalk = this.stalks.get(vertexName) || vecZeros(this.qDim);
-            if (!isFiniteVector(stalk)) {
-                console.error(`Sheaf.getStalksAsVector: Non-finite stalk for vertex ${vertexName}. Resetting to zeros.`, stalk);
-                logger.error(`Sheaf.getStalksAsVector: Non-finite stalk for vertex ${vertexName}. Resetting to zeros.`);
-                stalk.fill(0);
+        const nV = this.graph.vertices.length;
+        const expectedLength = nV * this.qDim;
+        const output = new Float32Array(expectedLength);
+        
+        for (let i = 0; i < nV; i++) {
+            const v = this.graph.vertices[i];
+            const offset = i * this.qDim;
+            const stalk = this.stalks.get(v);
+
+            if (isFiniteVector(stalk) && stalk.length === this.qDim) {
+                output.set(stalk, offset);
+            } else {
+                logger.warn(`Sheaf.getStalksAsVector: Invalid stalk for vertex ${v}; using zeros.`);
             }
-            flatStalks.set(stalk, offset);
-            offset += this.qDim;
         }
-        if (!isFiniteVector(flatStalks)) {
-            console.error('Sheaf.getStalksAsVector: Generated flatStalks is non-finite. Returning zeros.', { flatStalks });
-            logger.error('Sheaf.getStalksAsVector: Generated flatStalks is non-finite. Returning zeros.');
-            return vecZeros(numVertices * this.qDim);
+
+        if (!isFiniteVector(output)) {
+            logger.error(`Sheaf.getStalksAsVector: Assembled vector is non-finite. Returning a zero vector.`);
+            return vecZeros(expectedLength);
         }
-        return flatStalks;
+        
+        return output;
     }
 
+    isValidTriangle(tri) {
+        if (!Array.isArray(tri) || tri.length !== 3) return false;
+        const [a, b, c] = tri;
+        if (!this.graph.vertices.includes(a) || !this.graph.vertices.includes(b) || !this.graph.vertices.includes(c)) return false;
+        
+        const edge_ab = [a, b].sort().join(',');
+        const edge_bc = [b, c].sort().join(',');
+        const edge_ca = [c, a].sort().join(',');
+        
+        return this.edgeSet.has(edge_ab) && this.edgeSet.has(edge_bc) && this.edgeSet.has(edge_ca);
+    }
 
     addEdge(u, v, weight = 0.5) {
         if (!this.graph.vertices.includes(u) || !this.graph.vertices.includes(v)) {
-            console.warn(`Sheaf.addEdge: Vertex not found for ${u} or ${v}. Skipping.`);
             logger.warn(`Sheaf.addEdge: Vertex not found for ${u} or ${v}`);
             return;
         }
         const sorted = [u, v].sort();
         const key = sorted.join(',');
-        if (!this.graph.edges.some(e => e.slice(0, 2).join(',') === key)) {
+        if (!this.edgeSet.has(key)) {
             this.graph.edges.push([sorted[0], sorted[1], weight]);
-            logger.info(`Added edge ${u}-${v} with weight ${weight.toFixed(3)}`);
+            this.edgeSet.add(key);
+            logger.info(`Added edge ${u}-${v} with weight ${(weight ?? 0).toFixed(3)}`);
         }
     }
 
     removeEdge(u, v) {
         const sorted = [u, v].sort();
         const key = sorted.join(',');
-        const idx = this.graph.edges.findIndex(e => e.slice(0, 2).join(',') === key);
+        const idx = this.graph.edges.findIndex(e => e.slice(0, 2).sort().join(',') === key);
         if (idx !== -1) {
             this.graph.edges.splice(idx, 1);
+            this.edgeSet.delete(key);
             logger.info(`Removed edge ${u}-${v}`);
         }
     }
 
     addTriangle(a, b, c) {
         if (![a, b, c].every(v => this.graph.vertices.includes(v))) {
-            console.warn(`Sheaf.addTriangle: Vertex not found for ${a}, ${b}, or ${c}. Skipping.`);
             logger.warn(`Sheaf.addTriangle: Vertex not found for ${a}, ${b}, or ${c}`);
             return;
         }
         const sorted = [a, b, c].sort();
         const key = sorted.join(',');
-        if (!this.simplicialComplex.triangles.some(t => t.join(',') === key)) {
+        if (!this.simplicialComplex.triangles.some(t => t.sort().join(',') === key)) {
             this.simplicialComplex.triangles.push(sorted);
             this.addEdge(a, b);
             this.addEdge(b, c);
@@ -253,7 +306,7 @@ export class EnhancedQualiaSheaf {
     removeTriangle(a, b, c) {
         const sorted = [a, b, c].sort();
         const key = sorted.join(',');
-        const idx = this.simplicialComplex.triangles.findIndex(t => t.join(',') === key);
+        const idx = this.simplicialComplex.triangles.findIndex(t => t.sort().join(',') === key);
         if (idx !== -1) {
             this.simplicialComplex.triangles.splice(idx, 1);
             logger.info(`Removed triangle ${a}-${b}-${c}`);
@@ -262,13 +315,12 @@ export class EnhancedQualiaSheaf {
 
     addTetrahedron(a, b, c, d) {
         if (![a, b, c, d].every(v => this.graph.vertices.includes(v))) {
-            console.warn(`Sheaf.addTetrahedron: Vertex not found for ${a}, ${b}, ${c}, or ${d}. Skipping.`);
             logger.warn(`Sheaf.addTetrahedron: Vertex not found for ${a}, ${b}, ${c}, or ${d}`);
             return;
         }
         const sorted = [a, b, c, d].sort();
         const key = sorted.join(',');
-        if (!this.simplicialComplex.tetrahedra.some(t => t.join(',') === key)) {
+        if (!this.simplicialComplex.tetrahedra.some(t => t.sort().join(',') === key)) {
             this.simplicialComplex.tetrahedra.push(sorted);
             for (let i = 0; i < 4; i++) {
                 const face = sorted.filter((_, idx) => idx !== i).sort();
@@ -281,7 +333,7 @@ export class EnhancedQualiaSheaf {
     removeTetrahedron(a, b, c, d) {
         const sorted = [a, b, c, d].sort();
         const key = sorted.join(',');
-        const idx = this.simplicialComplex.tetrahedra.findIndex(t => t.join(',') === key);
+        const idx = this.simplicialComplex.tetrahedra.findIndex(t => t.sort().join(',') === key);
         if (idx !== -1) {
             this.simplicialComplex.tetrahedra.splice(idx, 1);
             logger.info(`Removed tetrahedron ${a}-${b}-${c}-${d}`);
@@ -289,90 +341,74 @@ export class EnhancedQualiaSheaf {
     }
 
     async computeVertexCorrelationsFromHistory() {
-        if (this.stalkHistory.length < this.stalkHistorySize / 2) {
-            return identity(this.graph.vertices.length);
+        const n = this.graph.vertices.length;
+        if (!(this.stalkHistory instanceof CircularBuffer)) {
+            logger.warn('Sheaf.computeVertexCorrelationsFromHistory: Invalid stalkHistory. Reinitializing.');
+            this.stalkHistory = new CircularBuffer(100);
+        }
+        if (this.stalkHistory.length < 2) {
+            return identity(n);
         }
 
-        const numVertices = this.graph.vertices.length;
-        if (numVertices === 0) return zeroMatrix(0,0);
+        const validHistory = this.stalkHistory.getAll().filter(isFiniteVector);
+        if (validHistory.length < 2) {
+            return identity(n);
+        }
 
         if (Numeric) {
-            const data = this.stalkHistory.map(h => Array.from(h));
             try {
-                const corr = Numeric.cor(data);
-                if (!isFiniteMatrix(corr)) {
-                    console.warn('Sheaf: Numeric.js returned non-finite correlation matrix; falling back to identity.', corr);
-                    logger.warn('Sheaf: Numeric.js returned non-finite correlation matrix; falling back to identity.');
-                    return identity(numVertices);
-                }
-                return corr;
+                const corr = Numeric.cor(validHistory);
+                if (isFiniteMatrix(corr)) return corr;
+                logger.warn('Sheaf: Numeric.js returned non-finite correlation matrix; falling back.');
             } catch (e) {
-                console.warn('Sheaf: Numeric.js correlation failed; falling back to custom impl:', e);
-                logger.warn('Sheaf: Numeric.js correlation failed; falling back to custom impl:', e);
+                logger.warn('Sheaf: Numeric.js correlation failed; falling back.', e);
             }
         }
-
-        const corr = zeroMatrix(numVertices, numVertices);
-        const means = new Float32Array(numVertices).fill(0);
-        for (let i = 0; i < numVertices; i++) {
-            for (let t = 0; t < this.stalkHistory.length; t++) {
-                const val = this.stalkHistory[t][i];
-                means[i] += (Number.isFinite(val) ? val : 0);
-            }
-            means[i] /= this.stalkHistory.length;
+    
+        const covMatrix = await runWorkerTask('covarianceMatrix', { states: validHistory, eps: this.eps }, 10000);
+        if (isFiniteMatrix(covMatrix)) {
+            return covMatrix;
         }
-
-        for (let i = 0; i < numVertices; i++) {
-            for (let j = i; j < numVertices; j++) {
-                let numerator = 0;
-                let denom_i = 0;
-                let denom_j = 0;
-                for (let t = 0; t < this.stalkHistory.length; t++) {
-                    const diff_i = (this.stalkHistory[t][i] || 0) - (means[i] || 0);
-                    const diff_j = (this.stalkHistory[t][j] || 0) - (means[j] || 0);
-                    numerator += diff_i * diff_j;
-                    denom_i += diff_i * diff_i;
-                    denom_j += diff_j * diff_j; // Corrected typo here!
-                }
-                const correlation = (Math.sqrt(denom_i) * Math.sqrt(denom_j)) < 1e-9 ? 0 : numerator / (Math.sqrt(denom_i) * Math.sqrt(denom_j));
-                corr[i][j] = clamp(correlation, -1, 1);
-                corr[j][i] = corr[i][j];
-            }
-        }
-
-        if (!isFiniteMatrix(corr)) {
-            console.warn('Sheaf: Non-finite correlation matrix from custom implementation; returning identity.', corr);
-            logger.warn('Sheaf: Non-finite correlation matrix; returning identity.');
-            return identity(numVertices);
-        }
-
-        return corr;
+        return identity(n);
     }
 
     async initialize() {
+        if (this.ready) {
+            logger.info('Sheaf.initialize: Already initialized. Skipping.');
+            return;
+        }
         logger.info('EnhancedQualiaSheaf.initialize() called.');
         try {
             await this.computeCorrelationMatrix();
             this.projectionMatrices = await this.computeProjectionMatrices();
             await this.computeH1Dimension();
-            await this._updateDerivedMetrics(); // This will now correctly trigger Phi calculation
+            await this._updateDerivedMetrics();
             this.ready = true;
             logger.info('Enhanced Qualia Sheaf ready with higher-order simplices.');
         } catch (e) {
-            console.error('CRITICAL ERROR: EnhancedQualiaSheaf initialization failed:', e);
             logger.error('CRITICAL ERROR: EnhancedQualiaSheaf initialization failed:', e);
             this.ready = false;
             throw e;
         }
     }
-
-    async adaptSheafTopology(adaptFreq = 100, stepCount = 0) {
-        if (!this.ready) {
-            logger.warn(`Sheaf not ready. Skipping topology adaptation at step ${stepCount}.`);
-            return;
+    
+    _csrToDense(csr) {
+        if (!csr || !csr.rowPtr) return zeroMatrix(0, 0);
+        const n = csr.n || (csr.rowPtr.length - 1);
+        const dense = zeroMatrix(n, n);
+        for (let i = 0; i < n; i++) {
+            for (let j = csr.rowPtr[i]; j < csr.rowPtr[i + 1]; j++) {
+                const col = csr.colIndices[j];
+                const val = csr.values[j];
+                dense[i][col] = val;
+            }
         }
-        if (stepCount % adaptFreq !== 0) return;
-
+        return dense;
+    }
+    
+    async adaptSheafTopology(adaptFreq = 100, stepCount = 0) {
+        if (!this.ready || stepCount % adaptFreq !== 0) return;
+        
         if (this.stalkHistory.length < this.stalkHistorySize / 2) {
             logger.info(`Sheaf: Skipping topology adaptation at step ${stepCount}; insufficient history (${this.stalkHistory.length}/${this.stalkHistorySize}).`);
             return;
@@ -380,43 +416,34 @@ export class EnhancedQualiaSheaf {
 
         this.correlationMatrix = await this.computeVertexCorrelationsFromHistory();
         if (!isFiniteMatrix(this.correlationMatrix)) {
-            console.warn('Sheaf: Non-finite correlation matrix after history computation; skipping adaptation.', this.correlationMatrix);
             logger.warn('Sheaf: Non-finite correlation matrix; skipping adaptation.');
             return;
         }
-
-        const addThresh = clamp(0.6 + (1 - (this.gestaltUnity || 0.5)) * 0.2, 0.5, 0.9);
-        const removeThresh = clamp(0.1 + (this.inconsistency || 0.5) * 0.3, 0.05, 0.4);
-        const targetH1 = 2.0;
-
-        const oldEdgeCount = this.graph.edges.length;
-        const oldTriangleCount = this.simplicialComplex.triangles.length;
-
-        this.adaptEdges(this.correlationMatrix, addThresh, removeThresh);
-        this.adaptSimplices(this.correlationMatrix, targetH1);
-
-        try {
-            await this.computeCorrelationMatrix();
-            await this.computeH1Dimension();
-            await this._updateDerivedMetrics(); // This will now correctly trigger Phi calculation
-        } catch (e) {
-            console.error('Sheaf: Error during recomputing metrics after topology adaptation:', e);
-            logger.error('Sheaf: Error during recomputing metrics after topology adaptation:', e);
-            this.ready = false;
+        
+        const numVertices = this.graph.vertices.length;
+        if (numVertices < 3) {
             return;
         }
-
-
-        const edgeDelta = this.graph.edges.length - oldEdgeCount;
-        const triDelta = this.simplicialComplex.triangles.length - oldTriangleCount;
-        logger.info(`Sheaf adapted at step ${stepCount}: edges=${this.graph.edges.length} (${edgeDelta > 0 ? '+' : ''}${edgeDelta}), triangles=${this.simplicialComplex.triangles.length} (${triDelta > 0 ? '+' : ''}${triDelta}), h1=${this.h1Dimension.toFixed(2)}, phi=${this.phi.toFixed(3)}`);
+        
+        try {
+            const addThresh = this.adaptation.addThresh + (1 - this.gestaltUnity) * 0.1;
+            const removeThresh = this.adaptation.removeThresh + this.inconsistency * 0.2;
+            this.adaptEdges(this.correlationMatrix, addThresh, removeThresh);
+            this.adaptSimplices(this.correlationMatrix);
+            
+            await this.computeCorrelationMatrix();
+            await this.computeH1Dimension();
+            await this._updateDerivedMetrics();
+            logger.info(`Sheaf adapted at step ${stepCount}.`);
+        } catch(e) {
+            logger.error(`Sheaf.adaptSheafTopology: Failed: ${e.message}`, { stack: e.stack });
+        }
     }
-
+    
     adaptEdges(corrMatrix, addThreshold, removeThreshold) {
         const numVertices = this.graph.vertices.length;
         if (numVertices === 0) return;
 
-        const currentEdges = new Set(this.graph.edges.map(e => e.slice(0, 2).sort().join(',')));
         let added = 0;
         const maxAdd = 3;
         const maxEdges = 20;
@@ -444,7 +471,6 @@ export class EnhancedQualiaSheaf {
         });
         edgesToRemove.forEach(edge => this.removeEdge(edge[0], edge[1]));
 
-
         if (this.graph.edges.length < maxEdges) {
             for (let i = 0; i < numVertices && added < maxAdd; i++) {
                 for (let j = i + 1; j < numVertices; j++) {
@@ -456,7 +482,7 @@ export class EnhancedQualiaSheaf {
                     const edgeKey = [u, v].sort().join(',');
                     const contagionBoost = (contagionScores[i] + contagionScores[j]) / 2;
 
-                    if (corrVal > addThreshold && !currentEdges.has(edgeKey) && contagionBoost > 0.5) {
+                    if (corrVal > addThreshold && !this.edgeSet.has(edgeKey) && contagionBoost > 0.5) {
                         const weight = clamp(corrVal * (this.gestaltUnity || 0.5) * contagionBoost, 0.1, 1.0);
                         this.addEdge(u, v, weight);
                         added++;
@@ -485,19 +511,14 @@ export class EnhancedQualiaSheaf {
                         const avgC = (c1 + c2 + c3) / 3;
 
                         const u = this.graph.vertices[i], v = this.graph.vertices[j], w = this.graph.vertices[k];
-                        const edge_uv_exists = this.graph.edges.some(e => e.slice(0, 2).sort().join(',') === [u, v].sort().join(','));
-                        const edge_vw_exists = this.graph.edges.some(e => e.slice(0, 2).sort().join(',') === [v, w].sort().join(','));
-                        const edge_wu_exists = this.graph.edges.some(e => e.slice(0, 2).sort().join(',') === [w, u].sort().join(','));
-
-
-                        if (avgC > 0.8 && edge_uv_exists && edge_vw_exists && edge_wu_exists) {
+                        if (avgC > 0.8 && this.isValidTriangle([u, v, w])) {
                             const tri = [u, v, w];
                             const key = tri.sort().join(',');
                             if (!this.simplicialComplex.triangles.some(t => t.sort().join(',') === key)) {
                                 this.addTriangle(...tri);
                                 addedTri++;
                                 changed = true;
-                                logger.info(`Added high-coherence triangle (h1=${this.h1Dimension.toFixed(2)})`);
+                                logger.info(`Added high-coherence triangle (h1=${(this.h1Dimension ?? 0).toFixed(2)})`);
                                 return;
                             }
                         }
@@ -510,24 +531,18 @@ export class EnhancedQualiaSheaf {
                 const idxs = tri.map(v => this.graph.vertices.indexOf(v));
                 if (idxs.some(id => id === -1)) return;
                 if (corrMatrix[idxs[0]]?.[idxs[1]] === undefined || corrMatrix[idxs[1]]?.[idxs[2]] === undefined || corrMatrix[idxs[2]]?.[idxs[0]] === undefined) return;
-                const pairCorrs = [
-                    corrMatrix[idxs[0]][idxs[1]],
-                    corrMatrix[idxs[1]][idxs[2]],
-                    corrMatrix[idxs[2]][idxs[0]]
-                ];
-                const minCorr = Math.min(...pairCorrs);
-                if (minCorr < 0.3) toPrune.push(tri);
+                const pairCorrs = [corrMatrix[idxs[0]][idxs[1]], corrMatrix[idxs[1]][idxs[2]], corrMatrix[idxs[2]][idxs[0]]];
+                if (Math.min(...pairCorrs) < 0.3) toPrune.push(tri);
             });
             if (toPrune.length > 0) {
                 this.removeTriangle(...toPrune[0]);
                 changed = true;
-                logger.info(`Pruned low-coherence triangle (h1=${this.h1Dimension.toFixed(2)})`);
+                logger.info(`Pruned low-coherence triangle (h1=${(this.h1Dimension ?? 0).toFixed(2)})`);
             }
         }
 
         const maxTetrahedra = 5;
         if (this.simplicialComplex.tetrahedra.length < maxTetrahedra && this.gestaltUnity > 0.8 && deltaH1 < -1) {
-            const addedTet = [];
             for (let i = 0; i < numV; i++) {
                 for (let j = i + 1; j < numV; j++) {
                     for (let k = j + 1; k < numV; k++) {
@@ -549,7 +564,6 @@ export class EnhancedQualiaSheaf {
 
                             if (avgPairwiseCorr > 0.8 && !this.simplicialComplex.tetrahedra.some(t => t.sort().join(',') === vertices.sort().join(','))) {
                                 this.addTetrahedron(...vertices);
-                                addedTet.push(vertices);
                                 changed = true;
                                 logger.info(`Added high-coherence tetrahedron`);
                                 return;
@@ -588,12 +602,13 @@ export class EnhancedQualiaSheaf {
         }
 
         if (changed) {
-            logger.info(`Simplex adaptation applied (deltaH1=${deltaH1.toFixed(2)})`);
+            logger.info(`Simplex adaptation applied (deltaH1=${(deltaH1 ?? 0).toFixed(2)})`);
         }
     }
 
     async buildBoundaryMatrices() {
         if (!this.graph.vertices.length) {
+            logger.warn('Sheaf.buildBoundaryMatrices: No vertices in graph. Returning empty boundary matrices.');
             return {
                 partial1: { flatData: new Float32Array(0), rows: 0, cols: 0 },
                 partial2: { flatData: new Float32Array(0), rows: 0, cols: 0 },
@@ -610,278 +625,231 @@ export class EnhancedQualiaSheaf {
         const nT = this.simplicialComplex.triangles.length;
         const nTet = this.simplicialComplex.tetrahedra.length;
 
-        const boundary1 = zeroMatrix(nE, nV);
+        const partial1 = zeroMatrix(nE, nV);
+        let nonZeroCount1 = 0;
         this.graph.edges.forEach((edge, eIdx) => {
-            if (eIdx < nE) {
-                if (edge.length < 2) {
-                    console.warn(`Sheaf.buildBoundaryMatrices: Invalid edge structure for ∂1: ${JSON.stringify(edge)}. Skipping.`);
-                    logger.warn(`Sheaf: Invalid edge structure for ∂1: ${JSON.stringify(edge)}. Skipping.`);
-                    return;
-                }
-                const u = edge[0];
-                const v = edge[1];
-
-                const uIdx = vMap.get(u);
-                const vIdx = vMap.get(v);
-
-                if (uIdx !== undefined && uIdx < nV) boundary1[eIdx][uIdx] = 1;
-                if (vIdx !== undefined && vIdx < nV) boundary1[eIdx][vIdx] = 1;
-            } else { console.warn(`Sheaf: Edge index out of bounds for ∂1: ${eIdx}. Max: ${nE-1}`); logger.warn(`Sheaf: Edge index out of bounds for ∂1: ${eIdx}`); }
+            const [u, v] = edge;
+            const uIdx = vMap.get(u);
+            const vIdx = vMap.get(v);
+            if (uIdx === undefined || vIdx === undefined) {
+                logger.warn(`Sheaf.buildBoundaryMatrices: Invalid vertex index for edge ${u}-${v} (uIdx=${uIdx}, vIdx=${vIdx})`);
+                return;
+            }
+            partial1[eIdx][uIdx] = 1;
+            partial1[eIdx][vIdx] = 1;
+            nonZeroCount1 += 2;
         });
-
-        const boundary2 = zeroMatrix(nT, nE);
+            
+        const partial2 = zeroMatrix(nT, nE);
+        let nonZeroCount2 = 0;
         this.simplicialComplex.triangles.forEach((tri, tIdx) => {
-            if (tIdx < nT) {
-                const sortedTri = tri.slice().sort();
-                const u = sortedTri[0], v = sortedTri[1], w = sortedTri[2];
-
-                const edgesOfTri = [
-                    [u, v].sort().join(','),
-                    [v, w].sort().join(','),
-                    [u, w].sort().join(',')
-                ];
-
-                edgesOfTri.forEach(edgeStr => {
-                    const eIdx = eMapIndices.get(edgeStr);
-                    if (eIdx !== undefined && eIdx < nE) {
-                        boundary2[tIdx][eIdx] = 1;
-                    } else { console.warn(`Sheaf: Edge not found or index out of bounds for ∂2: ${edgeStr} in triangle ${sortedTri}. Max: ${nE-1}`); logger.warn(`Sheaf: Edge not found or index out of bounds for ∂2: ${edgeStr}`); }
-                });
-            } else { console.warn(`Sheaf: Triangle index out of bounds for ∂2: ${tIdx}. Max: ${nT-1}`); logger.warn(`Sheaf: Triangle index out of bounds for ∂2: ${tIdx}`); }
-        });
-
-        const boundary3 = zeroMatrix(nTet, nT);
-        this.simplicialComplex.tetrahedra.forEach((tet, tetIdx) => {
-            if (tetIdx < nTet) {
-                const sortedTet = tet.slice().sort();
-                for (let i = 0; i < 4; i++) {
-                    const face = sortedTet.filter((_, idx) => idx !== i).sort();
-                    const faceStr = face.join(',');
-                    const tIdx = tMapIndices.get(faceStr);
-                    if (tIdx !== undefined && tIdx < nT) {
-                        boundary3[tetIdx][tIdx] = 1;
-                    } else { console.warn(`Sheaf: Triangle not found or index out of bounds for ∂3: ${faceStr} in tetrahedron ${sortedTet}. Max: ${nT-1}`); logger.warn(`Sheaf: Triangle not found or index out of bounds for ∂3: ${faceStr}`); }
+            if (!Array.isArray(tri) || tri.length !== 3) return;
+            const [u, v, w] = tri;
+            const edges = [
+                [u, v].sort().join(','), 
+                [v, w].sort().join(','), 
+                [w, u].sort().join(',')
+            ];
+            edges.forEach(edgeKey => {
+                const eIdx = eMapIndices.get(edgeKey);
+                if (eIdx !== undefined) {
+                    partial2[tIdx][eIdx] = 1;
+                    nonZeroCount2++;
                 }
-            } else { console.warn(`Sheaf: Tetrahedron index out of bounds for ∂3: ${tetIdx}. Max: ${nTet-1}`); logger.warn(`Sheaf: Tetrahedron index out of bounds for ∂3: ${tetIdx}`); }
+            });
         });
 
-        const safeFlatten = (matrix, rows, cols, name) => {
-            if (!isFiniteMatrix(matrix)) {
-                console.error(`Sheaf: Non-finite matrix for ${name} boundary detected. Returning empty flattened matrix.`, matrix);
-                logger.error(`Sheaf: Non-finite matrix for ${name} boundary detected. Returning empty flattened matrix.`);
-                return { flatData: new Float32Array(0), rows: 0, cols: 0 };
+        const partial3 = zeroMatrix(nTet, nT);
+        let nonZeroCount3 = 0;
+        this.simplicialComplex.tetrahedra.forEach((tet, tetIdx) => {
+            if (!Array.isArray(tet) || tet.length !== 4) return;
+            const sortedTet = tet.slice().sort();
+            for (let i = 0; i < 4; i++) {
+                const face = sortedTet.filter((_, idx) => idx !== i).sort();
+                const tIdx = tMapIndices.get(face.join(','));
+                if (tIdx !== undefined) {
+                    partial3[tetIdx][tIdx] = 1;
+                    nonZeroCount3++;
+                }
             }
-            const flatData = flattenMatrix(matrix).flatData;
-            if (!isFiniteVector(flatData)) {
-                console.error(`Sheaf: Non-finite flatData after flattening for ${name} boundary. Returning empty.`, flatData);
-                logger.error(`Sheaf: Non-finite flatData after flattening for ${name} boundary. Returning empty.`);
-                return { flatData: new Float32Array(0), rows: 0, cols: 0 };
-            }
-            return { flatData, rows, cols };
-        };
+        });
 
         return {
-            partial1: safeFlatten(boundary1, nE, nV, "boundary1"),
-            partial2: safeFlatten(boundary2, nT, nE, "boundary2"),
-            partial3: safeFlatten(boundary3, nTet, nT, "boundary3")
+            partial1: { flatData: flattenMatrix(partial1), rows: nE, cols: nV },
+            partial2: { flatData: flattenMatrix(partial2), rows: nT, cols: nE },
+            partial3: { flatData: flattenMatrix(partial3), rows: nTet, cols: nT }
         };
     }
 
     async computeCorrelationMatrix() {
         this.correlationMatrix = await this.computeVertexCorrelationsFromHistory();
-
         const numVertices = this.graph.vertices.length;
         if (numVertices === 0) {
             this.adjacencyMatrix = zeroMatrix(0, 0);
             return;
         }
 
-        // Only use owm.actorLoss if owm is defined and ready
-        let performanceFactor = 0;
-        if (this.owm?.ready && Number.isFinite(this.owm.actorLoss)) {
-             performanceFactor = (1 - clamp(this.owm.actorLoss / 0.5, 0, 1));
-        } else {
-            console.warn('Sheaf.computeCorrelationMatrix: OWM not ready or actorLoss not finite for performanceFactor. Defaulting to 0.', {owmReady: this.owm?.ready, actorLoss: this.owm?.actorLoss});
-            logger.warn('Sheaf: OWM not ready or actorLoss not finite for performanceFactor. Defaulting to 0.');
-        }
-
-
+        let performanceFactor = (this.owm?.ready && Number.isFinite(this.owm.actorLoss)) ? (1 - clamp(this.owm.actorLoss / 0.5, 0, 1)) : 0;
         let performanceScalar = clamp(1 + performanceFactor, 0.5, 2.0);
-        if (!Number.isFinite(performanceScalar)) {
-            console.warn('Sheaf: Non-finite performanceScalar. Setting to 1.', performanceFactor);
-            logger.warn('Sheaf: Non-finite performanceScalar. Setting to 1.');
-            performanceScalar = 1;
-        }
-
         let h1Boost = 1 + clamp(this.h1Dimension / Math.max(1, numVertices / 2), 0, 1) * 0.5;
-        if (!Number.isFinite(h1Boost)) {
-            console.warn('Sheaf: Non-finite h1Boost. Setting to 1.', this.h1Dimension);
-            logger.warn('Sheaf: Non-finite h1Boost. Setting to 1.');
-            h1Boost = 1;
-        }
 
         this.adjacencyMatrix = zeroMatrix(numVertices, numVertices);
-
         this.graph.edges.forEach(([u, v, weight = 0.1]) => {
             const i = this.graph.vertices.indexOf(u);
             const j = this.graph.vertices.indexOf(v);
             if (i >= 0 && j >= 0) {
-                if (this.correlationMatrix[i]?.[j] === undefined) {
-                    console.warn(`Sheaf: Missing correlation for edge ${u}-${v}. Using default weight.`);
-                    this.adjacencyMatrix[i][j] = this.adjacencyMatrix[j][i] = (Number.isFinite(weight) ? weight : 0.1);
-                    return;
-                }
-                const correlation = this.correlationMatrix[i][j];
-                const dynamicWeight = clamp((Number.isFinite(weight) ? weight : 0.1) + 0.9 * ((1 + correlation) / 2) * performanceScalar * h1Boost, 0.01, 1.0);
-                if (!Number.isFinite(dynamicWeight)) {
-                    console.warn(`Sheaf: Non-finite dynamicWeight for edge ${u}-${v}. Setting to default.`, {weight, correlation, performanceScalar, h1Boost});
-                    logger.warn(`Sheaf: Non-finite dynamicWeight for edge ${u}-${v}. Setting to ${weight}.`);
-                    this.adjacencyMatrix[i][j] = this.adjacencyMatrix[j][i] = (Number.isFinite(weight) ? weight : 0.1);
-                } else {
-                    this.adjacencyMatrix[i][j] = this.adjacencyMatrix[j][i] = dynamicWeight;
-                }
+                const correlation = this.correlationMatrix[i]?.[j] || 0;
+                const dynamicWeight = clamp(weight + 0.9 * ((1 + correlation) / 2) * performanceScalar * h1Boost, 0.01, 1.0);
+                this.adjacencyMatrix[i][j] = this.adjacencyMatrix[j][i] = dynamicWeight;
             }
         });
-
-        if (!isFiniteMatrix(this.adjacencyMatrix)) {
-            console.error('Sheaf: Non-finite adjacency matrix after dynamic weighting. Resetting to zero.', this.adjacencyMatrix);
-            logger.error('Sheaf: Non-finite adjacency matrix after dynamic weighting. Resetting to zero.');
-            this.adjacencyMatrix = zeroMatrix(numVertices, numVertices);
-        }
     }
 
     buildLaplacian() {
         const n = this.graph.vertices.length;
         const adj = this.adjacencyMatrix;
-        if (!adj || !isFiniteMatrix(adj) || adj.length !== n || (n > 0 && adj[0].length !== n)) {
-            console.error('Sheaf.buildLaplacian: Adjacency matrix is invalid or dimensions mismatch. Cannot build Laplacian.', adj);
-            logger.error('Sheaf.buildLaplacian: Adjacency matrix is invalid or dimensions mismatch. Cannot build Laplacian.');
-            return zeroMatrix(n, n);
+        if (!adj || !isFiniteMatrix(adj) || adj.length !== n) {
+            logger.error('Sheaf.buildLaplacian: Invalid adjacency matrix. Returning empty Laplacian.');
+            return { values: new Float32Array(0), colIndices: new Int32Array(0), rowPtr: new Int32Array(n + 1).fill(0), n };
         }
+        
+        const values = [];
+        const colIndices = [];
+        const rowPtr = new Int32Array(n + 1);
+        rowPtr[0] = 0;
+        
+        const tempRow = [];
 
-        if (GPU && n > 50) {
-            try {
-                const gpuInstance = new GPU();
-                const buildLaplacianKernel = gpuInstance.createKernel(function(adj_gpu, n_gpu, eps_gpu) {
-                    const i = this.thread.x;
-                    let deg = 0;
-                    let row = [];
-                    for (let j = 0; j < n_gpu; j++) {
-                        const weight = adj_gpu[i][j] || 0;
-                        if (weight > 0) {
-                            row[j] = -weight;
-                            deg += weight;
-                        } else {
-                            row[j] = 0;
-                        }
-                    }
-                    row[i] = deg + eps_gpu;
-                    return row;
-                }).setOutput([n, n]);
-                const L = buildLaplacianKernel(adj, n, this.eps);
-                if (!isFiniteMatrix(L)) {
-                    console.error('Sheaf: GPU.js Laplacian contains non-finite values. Falling back to CPU.', L);
-                    logger.error('Sheaf: GPU.js Laplacian contains non-finite values. Falling back to CPU.');
-                    return zeroMatrix(n, n);
-                }
-                return L;
-            } catch (e) {
-                console.warn('Sheaf: GPU.js Laplacian computation failed; falling back to CPU:', e);
-                logger.warn('Sheaf: GPU.js Laplacian computation failed; falling back to CPU:', e);
-            }
-        }
-
-        const L = zeroMatrix(n, n);
         for (let i = 0; i < n; i++) {
-            let deg = 0;
+            let degree = 0;
+            tempRow.length = 0;
+
             for (let j = 0; j < n; j++) {
-                const weight = adj[i]?.[j];
-                if (!Number.isFinite(weight)) {
-                    console.warn(`Sheaf.buildLaplacian: Non-finite weight in adjacency matrix at [${i}][${j}]. Setting to 0.`, weight);
-                    logger.warn(`Sheaf.buildLaplacian: Non-finite weight in adjacency matrix at [${i}][${j}]. Setting to 0.`);
-                } else if (weight > 0) {
-                    L[i][j] = -weight;
-                    deg += weight;
+                if (i !== j && adj[i][j] > 0) {
+                    tempRow.push({ col: j, val: adj[i][j] });
+                    degree += adj[i][j];
                 }
             }
-            L[i][i] = deg + this.eps;
+            tempRow.sort((a, b) => a.col - b.col);
+
+            tempRow.forEach(item => {
+                values.push(-item.val);
+                colIndices.push(item.col);
+            });
+
+            const diagCol = i;
+            let insertPos = colIndices.length;
+            for (let k = rowPtr[i]; k < colIndices.length; k++) {
+                if (colIndices[k] > diagCol) {
+                    insertPos = k;
+                    break;
+                }
+            }
+
+            values.splice(insertPos - rowPtr[i], 0, degree + this.eps);
+            colIndices.splice(insertPos - rowPtr[i], 0, diagCol);
+
+            rowPtr[i + 1] = values.length;
         }
-        if (!isFiniteMatrix(L)) {
-            console.error('Sheaf: Non-finite Laplacian matrix detected; resetting to zero.', L);
-            logger.error('Sheaf: Non-finite Laplacian matrix detected; resetting to zero.');
-            return zeroMatrix(n, n);
+
+        this.laplacian = {
+            values: new Float32Array(values),
+            colIndices: new Int32Array(colIndices),
+            rowPtr,
+            n
+        };
+
+        return this.laplacian;
+    }
+
+    csrMatVecMul(csr, v) {
+        const n = csr.n;
+        const result = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+            let sum = 0;
+            for (let j = csr.rowPtr[i]; j < csr.rowPtr[i + 1]; j++) {
+                sum += csr.values[j] * v[csr.colIndices[j]];
+            }
+            result[i] = sum;
         }
-        return L;
+        return result;
     }
 
     async computeProjectionMatrices() {
         const projections = new Map();
-        const identityMatrix = identity(this.qDim);
+        const eta_P = 0.01;
+        const lambda = 0.05; // Fix: Increase regularization for non-trivial projections
 
-        for (const [u, v] of this.graph.edges) {
-            projections.set(`${u}-${v}`, identityMatrix);
-            projections.set(`${v}-${u}`, identityMatrix);
+        for (const edge of this.graph.edges) {
+            const u = edge[0];
+            const v = edge[1];
+            let P_uv = this.projectionMatrices.get(`${u}-${v}`) || identity(this.qDim);
+            const s_u = this.stalks.get(u);
+            const s_v = this.stalks.get(v);
+
+            if (!isFiniteVector(s_u) || !isFiniteVector(s_v)) {
+                projections.set(`${u}-${v}`, identity(this.qDim));
+                projections.set(`${v}-${u}`, identity(this.qDim));
+                continue;
+            }
+
+            try {
+                const projected = await runWorkerTask('matVecMul', { matrix: flattenMatrix(P_uv), vector: s_u });
+                const error = vecSub(projected, s_v);
+                const grad = Array.from({ length: this.qDim }, () => new Float32Array(this.qDim));
+
+                for (let i = 0; i < this.qDim; i++) {
+                    for (let j = 0; j < this.qDim; j++) {
+                        grad[i][j] = error[i] * s_u[j];
+                    }
+                }
+
+                const reg_grad = P_uv.map((row, i) => row.map((val, j) => 2 * lambda * (val - (i === j ? 1 : 0))));
+                P_uv = P_uv.map((row, i) => row.map((val, j) => 
+                    clamp(val - eta_P * (grad[i][j] + reg_grad[i][j]), -1, 1)
+                ));
+
+                if (!isFiniteMatrix(P_uv)) {
+                    logger.warn(`Sheaf.computeProjectionMatrices: Non-finite projection matrix for ${u}-${v}. Using identity.`);
+                    P_uv = identity(this.qDim);
+                }
+
+                projections.set(`${u}-${v}`, P_uv);
+                projections.set(`${v}-${u}`, P_uv);
+            } catch (e) {
+                logger.warn(`Sheaf.computeProjectionMatrices: Error for edge ${u}-${v}. Using identity.`, e);
+                projections.set(`${u}-${v}`, identity(this.qDim));
+                projections.set(`${v}-${u}`, identity(this.qDim));
+            }
         }
+        this.projectionMatrices = projections;
         return projections;
     }
 
     async _updateGraphStructureAndMetrics() {
+        if (this.isUpdating) return;
+        this.isUpdating = true;
         try {
             await this.computeCorrelationMatrix();
             this.laplacian = this.buildLaplacian();
-
-            const flatLaplacian = flattenMatrix(this.laplacian);
-            if (!isFiniteVector(flatLaplacian.flatData)) {
-                console.error("Sheaf: Non-finite Laplacian matrix detected before spectral norm calculation. Defaulting maxEigApprox to 1.", flatLaplacian);
-                logger.error("Sheaf: Non-finite Laplacian matrix detected before spectral norm calculation. Defaulting maxEigApprox to 1.");
-                this.maxEigApprox = 1;
+            
+            if (this.laplacian && this.laplacian.values.length > 0) {
+                const denseLaplacian = this._csrToDense(this.laplacian);
+                this.maxEigApprox = await runWorkerTask('matrixSpectralNormApprox', { matrix: flattenMatrix(denseLaplacian) }, 15000);
             } else {
-                if (GPU && this.graph.vertices.length > 50) {
-                    try {
-                        const gpuInstance = new GPU();
-                        const spectralNormKernel = gpuInstance.createKernel(function(matrix_gpu, rows_gpu, cols_gpu) {
-                            let v = new Array(cols_gpu).fill(1 / Math.sqrt(cols_gpu));
-                            for (let i = 0; i < 10; i++) {
-                                let Av = new Array(cols_gpu).fill(0);
-                                for (let j = 0; j < cols_gpu; j++) {
-                                    for (let k = 0; k < rows_gpu; k++) {
-                                        Av[j] += matrix_gpu[k][j] * v[k];
-                                    }
-                                }
-                                let norm_val = Math.sqrt(Av.reduce((sum, x) => sum + x * x, 0));
-                                for (let j = 0; j < cols_gpu; j++) {
-                                    v[j] = Av[j] / (norm_val || 1);
-                                }
-                            }
-                            let finalAv = new Array(cols_gpu).fill(0);
-                            for (let j = 0; j < cols_gpu; j++) {
-                                for (let k = 0; k < rows_gpu; k++) {
-                                    finalAv[j] += matrix_gpu[k][j] * v[k];
-                                }
-                            }
-                            return Math.sqrt(finalAv.reduce((sum, x) => sum + x * x, 0));
-                        }).setOutput([1]);
-                        this.maxEigApprox = spectralNormKernel(this.laplacian, this.laplacian.length, this.laplacian[0].length)[0];
-                    } catch (e) {
-                        console.warn('Sheaf: GPU.js spectral norm failed; falling back to worker:', e);
-                        logger.warn('Sheaf: GPU.js spectral norm failed; falling back to worker:', e);
-                        this.maxEigApprox = await runWorkerTask('matrixSpectralNormApprox', { matrix: flatLaplacian }, 10000);
-                    }
-                } else {
-                    this.maxEigApprox = await runWorkerTask('matrixSpectralNormApprox', { matrix: flatLaplacian }, 10000);
-                }
-                if (!Number.isFinite(this.maxEigApprox) || this.maxEigApprox <= 0) {
-                    console.warn(`Sheaf: maxEigApprox was invalid (${this.maxEigApprox}). Resetting to 1.`);
-                    logger.warn(`Sheaf: maxEigApprox was invalid (${this.maxEigApprox}). Resetting to 1.`);
-                    this.maxEigApprox = 1;
-                }
+                this.maxEigApprox = 1;
+            }
+
+            if (!Number.isFinite(this.maxEigApprox) || this.maxEigApprox <= 0) {
+                this.maxEigApprox = 1;
             }
 
             this.projectionMatrices = await this.computeProjectionMatrices();
         } catch (e) {
-            console.error("Sheaf: Failed to update graph structure and metrics", e);
-            logger.error("Sheaf: Failed to update graph structure and metrics", e);
+            logger.error('Sheaf._updateGraphStructureAndMetrics: Failed to update', e);
             throw e;
+        } finally {
+            this.isUpdating = false;
         }
     }
 
@@ -891,102 +859,49 @@ export class EnhancedQualiaSheaf {
             return;
         }
         if (!isFiniteVector(state) || state.length !== this.stateDim) {
-            console.warn('Sheaf.diffuseQualia: Invalid input state received. Skipping diffusion.', {state, isFinite: isFiniteVector(state), length: state?.length});
-            logger.warn('Sheaf.diffuseQualia: Invalid input state received. Skipping diffusion.', {state});
+            logger.warn(`Sheaf.diffuseQualia: Invalid input state. Skipping. Expected length ${this.stateDim}, but got ${state?.length}.`, {state});
             return;
         }
 
         try {
             await this._updateGraphStructureAndMetrics();
         } catch (e) {
-            console.error('Sheaf.diffuseQualia: Error updating graph structure and metrics before diffusion:', e);
-            logger.error('Sheaf.diffuseQualia: Error updating graph structure and metrics before diffusion:', e);
+            logger.error('Sheaf.diffuseQualia: Error updating graph structure:', e);
             this.ready = false;
-            return;
-        }
-
-
-        const numGraphVertices = this.graph.vertices.length;
-        const qInput = new Float32Array(numGraphVertices);
-        for(let i=0; i<numGraphVertices; ++i) {
-            if (i < state.length) {
-                qInput[i] = clamp(state[i], 0, 1);
-            } else {
-                qInput[i] = 0;
-            }
-        }
-
-        if (!isFiniteVector(qInput) || qInput.length !== numGraphVertices) {
-            console.warn('Sheaf.diffuseQualia: Invalid qInput generated. Skipping diffusion.', {qInput, isFinite: isFiniteVector(qInput), length: qInput?.length});
-            logger.warn('Sheaf.diffuseQualia: Invalid qInput generated. Skipping diffusion.', {qInput});
             return;
         }
 
         const n = this.graph.vertices.length;
         const N = n * this.qDim;
-
-        const s = new Float32Array(N);
-        let currentOffset = 0;
-        for (const vertexName of this.graph.vertices) {
-            let stalkValue = this.stalks.get(vertexName) || vecZeros(this.qDim);
-            if (!isFiniteVector(stalkValue) || stalkValue.length !== this.qDim) {
-                console.warn(`Sheaf.diffuseQualia: Found invalid or missing stalk for vertex ${vertexName}. Resetting to zeros.`, stalkValue);
-                logger.warn(`Sheaf.diffuseQualia: Found invalid or missing stalk for vertex ${vertexName}. Resetting to zeros.`);
-                stalkValue = vecZeros(this.qDim);
-                this.stalks.set(vertexName, stalkValue);
-            }
-            s.set(stalkValue.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0), currentOffset);
-            currentOffset += this.qDim;
-        }
-
+        const s = this.getStalksAsVector();
         if (!isFiniteVector(s)) {
-            console.error('Sheaf.diffuseQualia: Initial concatenated stalk vector "s" contains non-finite values. Resetting to zeros.', {s, isFinite: isFiniteVector(s)});
-            logger.error('Sheaf.diffuseQualia: Initial concatenated stalk vector "s" contains non-finite values. Resetting to zeros.');
-            s.fill(0);
+            logger.error('Sheaf.diffuseQualia: Non-finite initial stalk vector "s". Aborting diffusion.');
+            return;
+        }
+        
+        const qInput = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+            // Fix: Ensure qInput uses full state information
+            qInput[i] = state[Math.min(i, state.length - 1)] || 0;
         }
 
         const Lfull = zeroMatrix(N, N);
-        const idx = new Map(this.graph.vertices.map((v, i) => [v, i]));
+        const idxMap = new Map(this.graph.vertices.map((v, i) => [v, i]));
 
         for (const [u, v] of this.graph.edges) {
-            const i = idx.get(u), j = idx.get(v);
+            const i = idxMap.get(u), j = idxMap.get(v);
             if (i === undefined || j === undefined) continue;
-
             const weight = this.adjacencyMatrix[i]?.[j];
-            if (!Number.isFinite(weight) || weight <= 0) {
-                console.warn(`Sheaf.diffuseQualia: Non-finite or non-positive weight for edge ${u}-${v}. Skipping block.`, weight);
-                logger.warn(`Sheaf.diffuseQualia: Non-finite or non-positive weight for edge ${u}-${v}. Skipping block.`);
-                continue;
-            }
+            if (!Number.isFinite(weight) || weight <= 0) continue;
 
-            const P_uv = this.projectionMatrices.get(`${u}-${v}`);
-            const P_vu = this.projectionMatrices.get(`${v}-${u}`);
-
-            if (!isFiniteMatrix(P_uv) || !isFiniteMatrix(P_vu)) {
-                console.warn(`Sheaf.diffuseQualia: Non-finite or missing projection matrix for edge ${u}-${v}. Skipping block.`, {P_uv, P_vu});
-                logger.warn(`Sheaf.diffuseQualia: Non-finite or missing projection matrix for edge ${u}-${v}. Skipping block.`);
-                continue;
-            }
-
+            const P_uv = this.projectionMatrices.get(`${u}-${v}`) || identity(this.qDim);
             for (let qi = 0; qi < this.qDim; qi++) {
                 for (let qj = 0; qj < this.qDim; qj++) {
-                    let val_uv = -weight * (P_uv[qi]?.[qj] || 0);
-                    if (qi !== qj) val_uv += 0.1 * Math.sin(qi - qj) * weight;
-                    if (Number.isFinite(val_uv)) {
-                        Lfull[i * this.qDim + qi][j * this.qDim + qj] = clamp(val_uv, -100, 100);
-                    } else {
-                        Lfull[i * this.qDim + qi][j * this.qDim + qj] = 0;
-                    }
-                }
-            }
-            for (let qi = 0; qi < this.qDim; qi++) {
-                for (let qj = 0; qj < this.qDim; qj++) {
-                    let val_vu = -weight * (P_vu[qi]?.[qj] || 0);
-                    if (qi !== qj) val_vu += 0.1 * Math.sin(qi - qj) * weight;
-                    if (Number.isFinite(val_vu)) {
-                        Lfull[j * this.qDim + qi][i * this.qDim + qj] = clamp(val_vu, -100, 100);
-                    } else {
-                        Lfull[j * this.qDim + qi][i * this.qDim + qj] = 0;
+                    let val = -weight * (P_uv[qi]?.[qj] || 0);
+                    if (qi !== qj) val += 0.1 * Math.sin(qi - qj) * weight;
+                    if (Number.isFinite(val)) {
+                        Lfull[i * this.qDim + qi][j * this.qDim + qj] = clamp(val, -100, 100);
+                        Lfull[j * this.qDim + qi][i * this.qDim + qj] = clamp(val, -100, 100);
                     }
                 }
             }
@@ -995,406 +910,835 @@ export class EnhancedQualiaSheaf {
         for (let i = 0; i < n; i++) {
             let degree = 0;
             for (let j = 0; j < n; j++) {
-                if (i !== j) {
-                    const adjVal = this.adjacencyMatrix[i]?.[j];
-                    if (Number.isFinite(adjVal)) {
-                        degree += adjVal;
-                    } else {
-                        console.warn(`Sheaf.diffuseQualia: Non-finite adjacency matrix value for degree calculation at [${i}][${j}]. Skipping.`, adjVal);
-                        logger.warn(`Sheaf.diffuseQualia: Non-finite adjacency matrix value for degree calculation at [${i}][${j}]. Skipping.`);
-                    }
+                if (i !== j && Number.isFinite(this.adjacencyMatrix[i]?.[j])) {
+                    degree += this.adjacencyMatrix[i][j];
                 }
             }
-            if (!Number.isFinite(degree)) {
-                console.warn(`Sheaf.diffuseQualia: Non-finite degree for vertex ${this.graph.vertices[i]}. Setting to 0.`, degree);
-                logger.warn(`Sheaf.diffuseQualia: Non-finite degree for vertex ${this.graph.vertices[i]}. Setting to 0.`);
-                degree = 0;
-            }
-
             for (let qi = 0; qi < this.qDim; qi++) {
                 Lfull[i * this.qDim + qi][i * this.qDim + qi] = clamp(degree + this.eps, -100, 100);
             }
         }
-        if (!isFiniteMatrix(Lfull)) {
-            console.error('Sheaf.diffuseQualia: Lfull matrix contains non-finite values after construction. Resetting to identity.', Lfull);
-            logger.error('Sheaf.diffuseQualia: Lfull matrix contains non-finite values after construction. Resetting to identity.');
-            for (let i = 0; i < N; ++i) for (let j = 0; j < N; ++j) Lfull[i][j] = (i === j ? 1 : 0);
-        }
-
-        const f_s = new Float32Array(N).fill(0);
-        for (let i = 0; i < n; i++) {
-            let inputVal = qInput[i % qInput.length];
-            if (!Number.isFinite(inputVal)) {
-                console.warn(`Sheaf.diffuseQualia: Non-finite qInput value at index ${i}. Setting to 0.`, inputVal);
-                logger.warn(`Sheaf.diffuseQualia: Non-finite qInput value at index ${i}. Setting to 0.`);
-                inputVal = 0;
-            }
-            for (let qi = 0; qi < this.qDim; qi++) {
-                f_s[i * this.qDim + qi] = this.alpha * inputVal * 2.0;
-            }
-        }
-        if (!isFiniteVector(f_s)) {
-            console.error('Sheaf.diffuseQualia: f_s vector is non-finite. Resetting to zeros.', {f_s, isFinite: isFiniteVector(f_s)});
-            logger.error('Sheaf.diffuseQualia: f_s vector is non-finite. Resetting to zeros.');
-            f_s.fill(0);
-        }
 
         let eta = this.gamma / Math.max(1, this.maxEigApprox);
-        if (!Number.isFinite(eta)) {
-            console.warn('Sheaf.diffuseQualia: Non-finite eta. Setting to 0.01.', eta);
-            logger.warn('Sheaf.diffuseQualia: Non-finite eta. Setting to 0.01.');
-            eta = 0.01;
+        if (!Number.isFinite(eta)) eta = 0.01;
+
+        const f_s = new Float32Array(N);
+        for (let i = 0; i < n; i++) {
+            for (let qi = 0; qi < this.qDim; qi++) {
+                f_s[i * this.qDim + qi] = this.alpha * (qInput[i] || 0) * 2.0;
+            }
         }
 
-        const A = zeroMatrix(N, N).map((row, i) => new Float32Array(row.map((v, j) => {
-            const val = (i === j ? 1 : 0) + eta * (Lfull[i]?.[j] || 0);
+        const A = zeroMatrix(N, N).map((row, i) => row.map((v, j) => {
+            const val = (i === j ? 1 : 0) - eta * (Lfull[i][j] || 0);
             return Number.isFinite(val) ? clamp(val, -100, 100) : 0;
-        })));
+        }));
 
-        const rhs = vecAdd(s, vecScale(f_s, eta)).map(v => Number.isFinite(v) ? clamp(v, -100, 100) : 0);
+        const noise = new Float32Array(N).map(() => (Math.random() - 0.5) * this.sigma);
+        const rhs = vecAdd(vecAdd(s, vecScale(f_s, eta)), vecScale(noise, Math.sqrt(eta)));
 
         if (!isFiniteMatrix(A) || !isFiniteVector(rhs)) {
-            console.error('Sheaf.diffuseQualia: Matrix A or RHS vector contains non-finite values before CG solve. Skipping diffusion.', {A_finite: isFiniteMatrix(A), rhs_finite: isFiniteVector(rhs), A, rhs});
-            logger.error('Sheaf.diffuseQualia: Matrix A or RHS vector contains non-finite values before CG solve. Skipping diffusion.');
-            const sNext = new Float32Array(N).fill(0);
-            this._updateStalksAndWindow(sNext, n);
-            await this._updateDerivedMetrics();
+            logger.error('Sheaf.diffuseQualia: Non-finite A or RHS for linear solver. Skipping.');
             return;
         }
 
         let sSolved;
-        try {
+        if (GPU) {
+            try {
+                const gpu = new GPU();
+                const matMul = gpu.createKernel(function(A, b) {
+                    let sum = 0;
+                    for (let j = 0; j < this.constants.N; j++) {
+                        sum += A[this.thread.y][j] * b[j];
+                    }
+                    return sum;
+                }).setOutput([N]).setConstants({ N });
+                sSolved = matMul(A, rhs);
+                gpu.destroy();
+            } catch (e) {
+                logger.warn('Sheaf.diffuseQualia: GPU.js failed; falling back to worker.', e);
+                sSolved = await runWorkerTask('solveLinearSystemCG', {
+                    A: flattenMatrix(A),
+                    b: rhs,
+                    opts: { tol: 1e-6, maxIter: 15, preconditioner: 'diagonal' }
+                }, 10000);
+            }
+        } else {
             sSolved = await runWorkerTask('solveLinearSystemCG', {
                 A: flattenMatrix(A),
                 b: rhs,
                 opts: { tol: 1e-6, maxIter: 15, preconditioner: 'diagonal' }
-            }, 5000);
-            if (!isFiniteVector(sSolved)) {
-                console.warn('Sheaf.diffuseQualia: Worker returned non-finite sSolved from solveLinearSystemCG. Falling back to zeros.', sSolved);
-                logger.warn('Sheaf.diffuseQualia: Worker returned non-finite sSolved from solveLinearSystemCG. Falling back to zeros.');
-                sSolved = vecZeros(N);
-            }
-        } catch (e) {
-            console.error('Sheaf.diffuseQualia: Error solving linear system in worker (CG). Falling back to zero vector:', e);
-            logger.error('Sheaf.diffuseQualia: Error solving linear system in worker (CG). Falling back to zero vector:', e);
-            sSolved = vecZeros(N);
+            }, 10000);
         }
 
-        if (!isFiniteVector(sSolved)) {
-            console.error('Sheaf.diffuseQualia: CRITICAL: Solver output or fallback contained non-finite values. Resetting sSolved to zero vector.', { sSolved, isFinite: isFiniteVector(sSolved) });
-            logger.error('Sheaf.diffuseQualia: CRITICAL: Solver output or fallback contained non-finite values. Resetting sSolved to zero vector.');
-            sSolved = vecZeros(N);
-        }
-
-        const sNext = new Float32Array(sSolved.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0));
-
-        this._updateStalksAndWindow(sNext, n);
+        const sNext = isFiniteVector(sSolved) ? new Float32Array(sSolved.map(v => clamp(v, -1, 1))) : vecZeros(N);
+        
+        this._updateStalksAndWindow(sNext, n, qInput); // Fix: Pass qInput for intentionality
         await this._updateDerivedMetrics();
     }
 
-    _updateStalksAndWindow(sNextVector, n) {
+    // Fix: Pass qInput for intentionality computation
+    _updateStalksAndWindow(sNextVector, n, qInput) {
         const currentStalkNorms = new Float32Array(n);
         for (let i = 0; i < n; i++) {
             const rawStalkSlice = sNextVector.slice(i * this.qDim, (i + 1) * this.qDim);
             const sanitizedStalk = new Float32Array(rawStalkSlice.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0));
-            if (!isFiniteVector(sanitizedStalk)) {
-                console.error(`Sheaf._updateStalksAndWindow: Sanitized stalk for vertex ${this.graph.vertices[i]} is non-finite. Resetting to zeros.`, { sanitizedStalk, isFinite: isFiniteVector(sanitizedStalk) });
-                logger.error(`Sheaf._updateStalksAndWindow: Sanitized stalk for vertex ${this.graph.vertices[i]} is non-finite. Resetting to zeros.`);
-                sanitizedStalk.fill(0);
-            }
             this.stalks.set(this.graph.vertices[i], sanitizedStalk);
             currentStalkNorms[i] = norm2(sanitizedStalk);
         }
-        if (!isFiniteVector(currentStalkNorms)) {
-            console.error('Sheaf._updateStalksAndWindow: currentStalkNorms is non-finite. Resetting to zeros.', { currentStalkNorms, isFinite: isFiniteVector(currentStalkNorms) });
-            logger.error('Sheaf._updateStalksAndWindow: currentStalkNorms is non-finite. Resetting to zeros.');
-            currentStalkNorms.fill(0);
-        }
+        
         this.stalkHistory.push(currentStalkNorms);
-        if (this.stalkHistory.length > this.stalkHistorySize) {
-            this.stalkHistory.shift();
-        }
-
-        const sanitizedNextVector = new Float32Array(sNextVector.map(v => Number.isFinite(v) ? clamp(v, -1, 1) : 0));
-        if (!isFiniteVector(sanitizedNextVector)) {
-            console.error('Sheaf._updateStalksAndWindow: sanitizedNextVector for windowedStates is non-finite. Resetting to zeros.', { sanitizedNextVector, isFinite: isFiniteVector(sanitizedNextVector) });
-            logger.error('Sheaf._updateStalksAndWindow: sanitizedNextVector for windowedStates is non-finite. Resetting to zeros.');
-            sanitizedNextVector.fill(0);
-        }
-        this.windowedStates.push(sanitizedNextVector);
-        if (this.windowedStates.length > this.windowSize) this.windowedStates.shift();
-        // console.log(`Sheaf._updateStalksAndWindow: windowedStates updated. Current length: ${this.windowedStates.length}, first entry sample: ${this.windowedStates[0]?.slice(0,5)}`); // Debugging
+        this.windowedStates.push(new Float32Array(sNextVector));
+        this.qInput = qInput; // Store for intentionality
     }
-
-    async _updateDerivedMetrics() {
-        // console.log('Sheaf._updateDerivedMetrics: Calculating inconsistency, gestalt unity, and integrated information.'); // Debugging
-        try {
-            await this.computeGluingInconsistency();
-            this.computeGestaltUnity();
-            await this.computeIntegratedInformation(); // This calculates Phi
-        } catch (e) {
-            console.error("Sheaf: Error during derived metrics update:", e);
-            logger.error("Sheaf: Error during derived metrics update:", e);
-            this.phi = 0.01;
-            this.h1Dimension = 0.5;
-            this.gestaltUnity = 0.05;
-            this.stability = 0.01;
-            this.inconsistency = 1.0;
-        }
-    }
-
-    async computeH1Dimension() {
-        const boundaries = await this.buildBoundaryMatrices();
-
-        let rankPartial2 = 0;
-        let rankPartial3 = 0;
-
-        try {
-            rankPartial2 = (await runWorkerTask('smithNormalForm', {
-                matrix: boundaries.partial2,
-                field: 'GF2',
-                bitPack: true
-            }, 5000))?.rank || 0;
-            if (!Number.isFinite(rankPartial2)) {
-                console.warn('Sheaf: Non-finite rank for ∂2. Setting to 0.', rankPartial2);
-                logger.warn('Sheaf: Non-finite rank for ∂2. Setting to 0.');
-                rankPartial2 = 0;
-            }
-
-            rankPartial3 = (await runWorkerTask('smithNormalForm', {
-                matrix: boundaries.partial3,
-                field: 'GF2',
-                bitPack: true
-            }, 5000))?.rank || 0;
-            if (!Number.isFinite(rankPartial3)) {
-                console.warn('Sheaf: Non-finite rank for ∂3. Setting to 0.', rankPartial3);
-                logger.warn('Sheaf: Non-finite rank for ∂3. Setting to 0.');
-                rankPartial3 = 0;
-            }
-        } catch (e) {
-            console.error('Sheaf: Homology computation (smithNormalForm) failed:', e);
-            logger.error('Sheaf: Homology computation (smithNormalForm) failed:', e);
-            this.h1Dimension = clamp(this.graph.edges.length - this.graph.vertices.length + this.simplicialComplex.triangles.length, 0, this.graph.vertices.length);
-            this.stability = clamp(Math.exp(-this.h1Dimension * 0.2), 0.01, 1);
-            return;
-        }
-
-        const numEdges = this.graph.edges.length;
-        const numTriangles = this.simplicialComplex.triangles.length;
-
-        this.h1Dimension = (numEdges - rankPartial2) - rankPartial3;
-        this.h1Dimension = clamp(this.h1Dimension, 0, numEdges);
-        if (!Number.isFinite(this.h1Dimension)) {
-            console.error('Sheaf: Final h1Dimension is non-finite. Setting to 0.', this.h1Dimension);
-            logger.error('Sheaf: Final h1Dimension is non-finite. Setting to 0.');
-            this.h1Dimension = 0;
-        }
-
-        this.stability = clamp(Math.exp(-this.h1Dimension * 0.2), 0.01, 1);
-        if (!Number.isFinite(this.stability)) {
-            console.error('Sheaf: Final stability is non-finite. Setting to 0.5.', this.stability);
-            logger.error('Sheaf: Final stability is non-finite. Setting to 0.5.');
-            this.stability = 0.5;
-        }
-    }
-
+    
     async computeGluingInconsistency() {
         let sum = 0;
+        let edgeCount = 0;
         for (const [u, v] of this.graph.edges) {
             const stalk_u = this.stalks.get(u);
             const stalk_v = this.stalks.get(v);
             const P_uv = this.projectionMatrices.get(`${u}-${v}`);
 
             if (!P_uv || !isFiniteMatrix(P_uv) || !isFiniteVector(stalk_u) || !isFiniteVector(stalk_v)) {
-                console.warn(`Sheaf.computeGluingInconsistency: Skipping inconsistency calculation for edge ${u}-${v} due to non-finite inputs.`, {P_uv, stalk_u, stalk_v});
-                logger.warn(`Sheaf.computeGluingInconsistency: Skipping inconsistency calculation for edge ${u}-${v} due to non-finite inputs.`);
                 continue;
             }
-
+            
             let projected_u;
-            try {
-                if (Numeric) {
-                    projected_u = Numeric.dot(P_uv, stalk_u);
-                } else {
-                    projected_u = await runWorkerTask('matVecMul', { matrix: flattenMatrix(P_uv), vector: stalk_u }, 5000);
-                }
-                if (!isFiniteVector(projected_u)) {
-                    console.warn(`Sheaf.computeGluingInconsistency: Worker/Numeric returned non-finite projected_u for edge ${u}-${v}. Setting to zeros.`, projected_u);
-                    logger.warn(`Sheaf.computeGluingInconsistency: Worker/Numeric returned non-finite projected_u for edge ${u}-${v}. Setting to zeros.`);
-                    projected_u = vecZeros(this.qDim);
-                }
-            } catch (e) {
-                console.error(`Sheaf.computeGluingInconsistency: Error projecting stalk_u for edge ${u}-${v}. Setting to zeros:`, e);
-                logger.error(`Sheaf.computeGluingInconsistency: Error projecting stalk_u for edge ${u}-${v}. Setting to zeros:`, e);
-                projected_u = vecZeros(this.qDim);
+            if (Numeric) {
+                projected_u = Numeric.dot(P_uv, stalk_u);
+            } else {
+                projected_u = await runWorkerTask('matVecMul', { matrix: flattenMatrix(P_uv), vector: stalk_u }, 5000);
             }
-
-            const safeProjected_u = isFiniteVector(projected_u) ? projected_u.map(v => clamp(v, -1, 1)) : vecZeros(this.qDim);
-
-            const diffNorm = norm2(vecSub(safeProjected_u, stalk_v));
+            if (!isFiniteVector(projected_u)) continue;
+            
+            const diffNorm = norm2(vecSub(projected_u, stalk_v));
             if (Number.isFinite(diffNorm)) {
                 sum += diffNorm;
-            } else {
-                console.warn(`Sheaf.computeGluingInconsistency: Non-finite diffNorm for edge ${u}-${v}. Skipping addition to sum.`, { projected: safeProjected_u, stalk_v, diffNorm });
-                logger.warn(`Sheaf.computeGluingInconsistency: Non-finite diffNorm for edge ${u}-${v}. Skipping addition to sum.`);
+                edgeCount++;
             }
         }
-        this.inconsistency = this.graph.edges.length > 0 ? clamp(sum / this.graph.edges.length, 0, 1) : 0;
-        if (!Number.isFinite(this.inconsistency)) {
-            console.error('Sheaf: Final inconsistency is non-finite. Setting to 1.0.', this.inconsistency);
-            logger.error('Sheaf: Final inconsistency is non-finite. Setting to 1.0.');
-            this.inconsistency = 1.0;
-        }
+        this.inconsistency = edgeCount > 0 ? clamp(sum / edgeCount, 0, 10) : 0;
+        this.inconsistencyHistory.push(this.inconsistency);
+        return this.inconsistency;
     }
 
-    computeGestaltUnity() {
-        let sum = 0;
-        this.graph.edges.forEach(([u, v]) => {
-            const stalk_u = this.stalks.get(u);
-            const stalk_v = this.stalks.get(v);
-            if (isFiniteVector(stalk_u) && isFiniteVector(stalk_v)) {
-                const diffNorm = norm2(vecSub(stalk_u, stalk_v));
-                if (Number.isFinite(diffNorm)) {
-                    sum += Math.exp(-diffNorm * this.beta);
-                } else {
-                    console.warn(`Sheaf.computeGestaltUnity: Non-finite diffNorm for edge ${u}-${v}. Skipping addition to sum.`, { stalk_u, stalk_v, diffNorm });
-                    logger.warn(`Sheaf.computeGestaltUnity: Non-finite diffNorm for edge ${u}-${v}. Skipping addition to sum.`);
+    async computeGestaltUnity() {
+        const stalks = Array.from(this.stalks.values()).filter(isFiniteVector);
+        if (stalks.length < 2) {
+            this.gestaltUnity = 0;
+            this.gestaltHistory.push(this.gestaltUnity);
+            return 0;
+        }
+
+        let totalSimilarity = 0;
+        let count = 0;
+        if (GPU) {
+            try {
+                const gpu = new GPU();
+                const computeSimilarity = gpu.createKernel(function(stalks, eps) {
+                    let sum = 0;
+                    for (let i = 0; i < stalks.length; i++) {
+                        for (let j = i + 1; j < stalks.length; j++) {
+                            let dotProd = 0;
+                            let norm1 = 0;
+                            let norm2 = 0;
+                            for (let k = 0; k < this.constants.qDim; k++) {
+                                dotProd += stalks[i][k] * stalks[j][k];
+                                norm1 += stalks[i][k] * stalks[i][k];
+                                norm2 += stalks[j][k] * stalks[j][k];
+                            }
+                            norm1 = Math.sqrt(norm1);
+                            norm2 = Math.sqrt(norm2);
+                            if (norm1 > eps && norm2 > eps) {
+                                sum += Math.abs(dotProd / (norm1 * norm2));
+                            }
+                        }
+                    }
+                    return sum;
+                }).setOutput([1]).setConstants({ qDim: this.qDim });
+                totalSimilarity = computeSimilarity(stalks, this.eps);
+                count = (stalks.length * (stalks.length - 1)) / 2;
+                gpu.destroy();
+            } catch (e) {
+                logger.warn('Sheaf.computeGestaltUnity: GPU.js failed; falling back to CPU.', e);
+            }
+        }
+
+        if (count === 0) {
+            for (let i = 0; i < stalks.length; i++) {
+                for (let j = i + 1; j < stalks.length; j++) {
+                    const n1 = norm2(stalks[i]);
+                    const n2 = norm2(stalks[j]);
+                    if (n1 > this.eps && n2 > this.eps) {
+                        const similarity = Math.abs(dot(stalks[i], stalks[j]) / (n1 * n2));
+                        if (Number.isFinite(similarity)) {
+                            totalSimilarity += similarity;
+                            count++;
+                        }
+                    }
                 }
             }
-        });
-        if (!Number.isFinite(sum)) {
-            console.warn('Sheaf.computeGestaltUnity: Sum became non-finite. Setting to 0.', sum);
-            logger.warn('Sheaf.computeGestaltUnity: Sum became non-finite. Setting to 0.');
-            sum = 0;
         }
-        this.gestaltUnity = this.graph.edges.length > 0 ? clamp(sum / this.graph.edges.length, 0.05, 0.99) : 0.05;
-        if (!Number.isFinite(this.gestaltUnity)) {
-            console.error('Sheaf: Final gestaltUnity is non-finite. Setting to 0.05.', this.gestaltUnity);
-            logger.error('Sheaf: Final gestaltUnity is non-finite. Setting to 0.05.');
-            this.gestaltUnity = 0.05;
+        this.gestaltUnity = count > 0 ? clamp(totalSimilarity / count, 0, 1) : 0;
+        this.gestaltHistory.push(this.gestaltUnity);
+        return this.gestaltUnity;
+    }
+    
+    _computeLogDet(A) {
+        const n = A.length;
+        if (n === 0) return 0;
+
+        const L = zeroMatrix(n, n);
+        const U = zeroMatrix(n, n);
+        for (let i = 0; i < n; i++) L[i][i] = 1;
+
+        for (let i = 0; i < n; i++) {
+            for (let j = i; j < n; j++) {
+                let sum = A[i][j];
+                for (let k = 0; k < i; k++) {
+                    sum -= L[i][k] * U[k][j];
+                }
+                U[i][j] = sum;
+            }
+            for (let j = i + 1; j < n; j++) {
+                let sum = A[j][i];
+                for (let k = 0; k < i; k++) {
+                    sum -= L[j][k] * U[k][i];
+                }
+                if (Math.abs(U[i][i]) < this.eps) {
+                    logger.warn(`Sheaf._computeLogDet: Near-singular matrix at i=${i}`);
+                    return 0;
+                }
+                L[j][i] = sum / U[i][i];
+            }
         }
+
+        let logDet = 0;
+        for (let i = 0; i < n; i++) {
+            if (Math.abs(U[i][i]) < this.eps) {
+                logger.warn(`Sheaf._computeLogDet: Singular matrix detected`);
+                return 0;
+            }
+            logDet += Math.log(Math.abs(U[i][i]));
+        }
+        return logDet;
     }
 
     async computeIntegratedInformation() {
-        console.log(`Sheaf.computeIntegratedInformation: Starting Phi calculation. Valid states length: ${this.windowedStates.filter(isFiniteVector).length}`); // Debugging
-        const validStates = this.windowedStates.filter(isFiniteVector);
-        if (validStates.length < Math.max(4, this.stateDim + this.qDim)) {
-            console.warn('Sheaf.computeIntegratedInformation: Not enough valid states for meaningful covariance calculation. Using base Phi.', validStates.length);
-            logger.warn('Sheaf.computeIntegratedInformation: Not enough valid states for meaningful covariance calculation. Using base Phi.');
-            this.phi = clamp(0.5 + (this.gestaltUnity || 0.1) * (this.stability || 0.1), 0.01, 5);
-            return;
-        }
-
-        let cov;
+        let MI = 0;
         try {
-            if (GPU && validStates.length > 100) {
-                const gpuInstance = new GPU();
-                const covarianceKernel = gpuInstance.createKernel(function(states_gpu, n_gpu, m_gpu, eps_gpu) {
-                    const i = this.thread.x;
-                    const j = this.thread.y;
-                    let mean_i = 0, mean_j = 0;
-                    for (let t = 0; t < n_gpu; t++) {
-                        mean_i += states_gpu[t][i];
-                        mean_j += states_gpu[t][j];
-                    }
-                    mean_i /= n_gpu;
-                    mean_j /= n_gpu;
-                    let cov_val = 0;
-                    for (let t = 0; t < n_gpu; t++) {
-                        cov_val += (states_gpu[t][i] - mean_i) * (states_gpu[t][j] - mean_j);
-                    }
-                    return (cov_val / (n_gpu - 1)) + (i === j ? eps_gpu : 0);
-                }).setOutput([validStates[0].length, validStates[0].length]);
-                cov = covarianceKernel(validStates, validStates.length, validStates[0].length, this.eps);
+            const validStates = this.windowedStates.getAll().filter(isFiniteVector);
+            if (validStates.length < this.windowSize / 4) {
+                logger.warn(`Sheaf.computeIntegratedInformation: Insufficient valid states (${validStates.length}/${this.windowSize}). Setting MI to 0.`);
+                MI = 0;
             } else {
-                // console.log(`Sheaf.computeIntegratedInformation: Sending ${validStates.length} states (each length ${validStates[0]?.length}) to worker for covarianceMatrix.`); // Debugging
-                cov = await runWorkerTask('covarianceMatrix', { states: validStates, eps: this.eps }, 10000);
-                // console.log(`Sheaf.computeIntegratedInformation: Received covarianceMatrix from worker. Sample: ${cov[0]?.slice(0,5)}`); // Debugging
-            }
-            if (!isFiniteMatrix(cov)) {
-                console.warn("Sheaf.computeIntegratedInformation: Worker/GPU returned non-finite covariance matrix. Setting to default.", cov);
-                logger.warn("Sheaf.computeIntegratedInformation: Worker/GPU returned non-finite covariance matrix. Setting to default.");
-                cov = zeroMatrix(validStates[0].length, validStates[0].length).map(row => row.fill(this.eps));
+                const tfVersion = tf?.version?.core || '0.0.0';
+                const useTF = tf && parseFloat(tfVersion) >= 2.0 && tf.linalg?.determinant;
+                if (useTF) {
+                    try {
+                        const statesArray = validStates.map(s => Array.from(s));
+                        if (!statesArray.every(s => isFiniteVector(s))) {
+                            throw new Error("Non-finite states detected in TensorFlow input.");
+                        }
+                        const statesTensor = tf.tensor2d(statesArray);
+                        const covMatrix = tf.matMul(statesTensor.transpose(), statesTensor).div(statesTensor.shape[0]);
+                        let logDet;
+                        try {
+                            const L = tf.linalg.cholesky(covMatrix);
+                            logDet = tf.sum(L.log().mul(2)).dataSync()[0];
+                        } catch (e) {
+                            logger.warn(`Sheaf.computeIntegratedInformation: Cholesky failed; trying determinant: ${e.message}`);
+                            logDet = tf.linalg.determinant(covMatrix).log().dataSync()[0];
+                        }
+                        MI = Number.isFinite(logDet) ? 0.1 * Math.abs(logDet) + this.eps : 0;
+                        tf.dispose([statesTensor, covMatrix, L]);
+                    } catch (e) {
+                        logger.warn(`Sheaf.computeIntegratedInformation: TensorFlow.js failed: ${e.message}`, { stack: e.stack });
+                    }
+                }
+
+                if (MI === 0) {
+                    const n = validStates[0].length;
+                    const mean = new Float32Array(n).fill(0);
+                    validStates.forEach(state => {
+                        for (let i = 0; i < n; i++) mean[i] += state[i] / validStates.length;
+                    });
+                    const covMatrix = zeroMatrix(n, n);
+                    validStates.forEach(state => {
+                        const centered = vecSub(state, mean);
+                        for (let i = 0; i < n; i++) {
+                            for (let j = i; j < n; j++) {
+                                covMatrix[i][j] += centered[i] * centered[j] / (validStates.length - 1);
+                                if (i !== j) covMatrix[j][i] = covMatrix[i][j];
+                            }
+                        }
+                    });
+                    if (isFiniteMatrix(covMatrix)) {
+                        MI = 0.1 * Math.abs(this._computeLogDet(covMatrix)) + this.eps;
+                    }
+                }
+
+                if (MI === 0) {
+                    logger.info('Sheaf.computeIntegratedInformation: Falling back to KSG worker.');
+                    const ksgMI = await runWorkerTask('ksgMutualInformation', { states: validStates, k: 3 }, 20000);
+                    MI = Number.isFinite(ksgMI) ? ksgMI : 0;
+                }
             }
         } catch (e) {
-            console.error('Sheaf.computeIntegratedInformation: Error computing covarianceMatrix:', e);
-            logger.error('Sheaf.computeIntegratedInformation: Error computing covarianceMatrix:', e);
-            this.phi = clamp(0.5 + (this.gestaltUnity || 0.1) * (this.stability || 0.1), 0.01, 5);
+            logger.error(`Sheaf.computeIntegratedInformation: Error computing MI: ${e.message}`, { stack: e.stack });
+            MI = 0;
+        }
+
+        const phiRaw = Math.log(1 + Math.abs(MI)) * this.stability * this.gestaltUnity * Math.exp(-this.inconsistency) * (1 + 0.05 * this.h1Dimension);
+        this.phi = clamp(phiRaw, 0, 100);
+        this.phiHistory.push(this.phi);
+        return this.phi;
+    }
+    
+    async computeCupProduct() {
+        let totalIntensity = 0;
+        let count = 0;
+
+        for (const triangle of this.simplicialComplex.triangles) {
+            if (!this.isValidTriangle(triangle)) {
+                logger.warn(`Sheaf.computeCupProduct: Skipping invalid triangle ${triangle}`);
+                continue;
+            }
+            const [u, v, w] = triangle;
+            const s_u = this.stalks.get(u), s_v = this.stalks.get(v), s_w = this.stalks.get(w);
+            if (!isFiniteVector(s_u) || !isFiniteVector(s_v) || !isFiniteVector(s_w)) {
+                logger.warn(`Sheaf.computeCupProduct: Non-finite stalks for triangle ${triangle}`);
+                continue;
+            }
+
+            const P_uv = this.projectionMatrices.get(`${u}-${v}`) || identity(this.qDim);
+            const P_vw = this.projectionMatrices.get(`${v}-${w}`) || identity(this.qDim);
+
+            try {
+                let P_compose;
+                if (Numeric) {
+                    P_compose = Numeric.dot(P_uv, P_vw);
+                } else {
+                    // Fix: JS fallback for matrix multiplication
+                    P_compose = zeroMatrix(this.qDim, this.qDim);
+                    for (let i = 0; i < this.qDim; i++) {
+                        for (let j = 0; j < this.qDim; j++) {
+                            let sum = 0;
+                            for (let k = 0; k < this.qDim; k++) {
+                                sum += (P_uv[i][k] || 0) * (P_vw[k][j] || 0);
+                            }
+                            P_compose[i][j] = clamp(sum, -1, 1);
+                        }
+                    }
+                    if (!isFiniteMatrix(P_compose)) {
+                        logger.warn(`Sheaf.computeCupProduct: Non-finite P_compose for triangle ${triangle}. Using identity.`);
+                        P_compose = identity(this.qDim);
+                    }
+                }
+
+                let s_w_projected;
+                if (Numeric) {
+                    s_w_projected = Numeric.dot(P_compose, s_w);
+                } else {
+                    s_w_projected = new Float32Array(this.qDim);
+                    for (let i = 0; i < this.qDim; i++) {
+                        let sum = 0;
+                        for (let j = 0; j < this.qDim; j++) {
+                            sum += (P_compose[i][j] || 0) * s_w[j];
+                        }
+                        s_w_projected[i] = clamp(sum, -1, 1);
+                    }
+                }
+
+                if (!isFiniteVector(s_w_projected)) {
+                    logger.warn(`Sheaf.computeCupProduct: Non-finite s_w_projected for triangle ${triangle}`);
+                    continue;
+                }
+
+                const cupValue = dot(s_u, s_w_projected);
+                if (Number.isFinite(cupValue)) {
+                    totalIntensity += Math.abs(cupValue);
+                    count++;
+                }
+            } catch (e) {
+                logger.warn(`Sheaf.computeCupProduct: Error for triangle ${triangle}: ${e.message}`, { stack: e.stack });
+            }
+        }
+        this.cup_product_intensity = count > 0 ? clamp(totalIntensity / count, 0, 1) : 0;
+        return this.cup_product_intensity;
+    }
+
+    async computeH1Dimension() {
+        const boundaryData = await this.buildBoundaryMatrices();
+        const { partial1, partial2 } = boundaryData;
+        const nV = this.graph.vertices.length;
+        const nE = this.graph.edges.length;
+
+        if (nE === 0 || nV === 0) {
+            this.h1Dimension = 0;
+            this.stability = 1;
+            return 0;
+        }
+
+        try {
+            const [smithData1, smithData2] = await Promise.all([
+                runWorkerTask('smithNormalForm', { matrix: partial1, field: 'GF2', bitPack: true }, 15000),
+                runWorkerTask('smithNormalForm', { matrix: partial2, field: 'GF2', bitPack: true }, 15000)
+            ]);
+
+            const rank1 = smithData1?.rank ?? 0;
+            const rank2 = smithData2?.rank ?? 0;
+
+            if (nE > 0 && rank1 === 0) {
+                logger.warn(`computeH1Dimension: Invalid rank1 (0) detected for non-empty graph. Computing cycles via Union-Find.`);
+                const cycles = await this._computeBetti1UnionFind();
+                this.h1Dimension = clamp(cycles, 0, nE);
+            } else {
+                this.h1Dimension = clamp(nE - rank1 - rank2, 0, nE);
+            }
+        } catch (e) {
+            logger.error(`Sheaf.computeH1Dimension: Error computing Smith Normal Form: ${e.message}`, { stack: e.stack });
+            const cycles = await this._computeBetti1UnionFind();
+            this.h1Dimension = clamp(cycles, 0, nE);
+        }
+
+        if (!Number.isFinite(this.h1Dimension)) {
+            logger.error(`Sheaf.computeH1Dimension: Non-finite h1Dimension calculated. Using Euler fallback.`);
+            this.h1Dimension = clamp(nE - nV + 1, 0, nE);
+        }
+
+        this.stability = clamp(Math.exp(-this.h1Dimension * 0.2), 0.01, 1);
+        return this.h1Dimension;
+    }
+
+    async _computeBetti1UnionFind() {
+        const nV = this.graph.vertices.length;
+        const nE = this.graph.edges.length;
+        
+        const parent = new Map(this.graph.vertices.map(v => [v, v]));
+        const rank = new Map(this.graph.vertices.map(v => [v, 0]));
+        
+        const find = (v) => {
+            if (parent.get(v) !== v) {
+                parent.set(v, find(parent.get(v)));
+            }
+            return parent.get(v);
+        };
+        
+        const union = (u, v) => {
+            const rootU = find(u);
+            const rootV = find(v);
+            if (rootU === rootV) return;
+            const rankU = rank.get(rootU);
+            const rankV = rank.get(rootV);
+            if (rankU < rankV) {
+                parent.set(rootU, rootV);
+            } else if (rankU > rankV) {
+                parent.set(rootV, rootU);
+            } else {
+                parent.set(rootV, rootU);
+                rank.set(rootU, rankU + 1);
+            }
+        };
+
+        this.graph.edges.forEach(([u, v]) => {
+            union(u, v);
+        });
+
+        const components = new Set(this.graph.vertices.map(v => find(v))).size;
+        const betti1 = nE - nV + components;
+        logger.info(`Sheaf._computeBetti1UnionFind: Computed β1=${betti1}, components=${components}`);
+        return betti1;
+    }
+
+    async simulateDiffusionStep(s_t) {
+        const N = this.graph.vertices.length * this.qDim;
+        const Lfull = zeroMatrix(N, N);
+        const idx = new Map(this.graph.vertices.map((v, i) => [v, i]));
+        const eta = this.gamma / Math.max(1, this.maxEigApprox);
+
+        for (const [u, v] of this.graph.edges) {
+            const i = idx.get(u), j = idx.get(v);
+            if (i === undefined || j === undefined) continue;
+            const weight = this.adjacencyMatrix[i]?.[j] || 0;
+            if (!Number.isFinite(weight) || weight <= 0) continue;
+            const P_uv = this.projectionMatrices.get(`${u}-${v}`) || identity(this.qDim);
+            for (let qi = 0; qi < this.qDim; qi++) {
+                for (let qj = 0; qj < this.qDim; qj++) {
+                    let val = -weight * (P_uv[qi]?.[qj] || 0);
+                    if (qi !== qj) val += 0.1 * Math.sin(qi - qj) * weight;
+                    if (Number.isFinite(val)) {
+                        Lfull[i * this.qDim + qi][j * this.qDim + qj] = clamp(val, -100, 100);
+                        Lfull[j * this.qDim + qi][i * this.qDim + qj] = clamp(val, -100, 100);
+                    }
+                }
+            }
+        }
+
+        for (let i = 0; i < this.graph.vertices.length; i++) {
+            let degree = 0;
+            for (let j = 0; j < this.graph.vertices.length; j++) {
+                if (i !== j && Number.isFinite(this.adjacencyMatrix[i]?.[j])) {
+                    degree += this.adjacencyMatrix[i][j];
+                }
+            }
+            for (let qi = 0; qi < this.qDim; qi++) {
+                Lfull[i * this.qDim + qi][i * this.qDim + qi] = clamp(degree + this.eps, -100, 100);
+            }
+        }
+
+        const A = zeroMatrix(N, N).map((row, i) => row.map((v, j) => {
+            const val = (i === j ? 1 : 0) - eta * (Lfull[i][j] || 0);
+            return Number.isFinite(val) ? clamp(val, -100, 100) : 0;
+        }));
+
+        const A_flat = flattenMatrix(A).flatData;
+        const result = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+            let sum = 0;
+            for (let j = 0; j < N; j++) {
+                sum += (A_flat[i * N + j] || 0) * s_t[j];
+            }
+            result[i] = clamp(sum, -1, 1); // Fix: Clamp output for stability
+        }
+
+        return result;
+    }
+
+    async computeStructuralSensitivity(perturbationScale = 0.05, numIterations = 10) {
+        if (!this.ready) {
+            this.structural_sensitivity = 0;
+            return 0;
+        }
+        const numEdges = this.graph.edges.length;
+        if (numEdges === 0) {
+            this.structural_sensitivity = 0;
+            return 0;
+        }
+
+        const s_t = this.getStalksAsVector();
+        let baseState;
+        try {
+            baseState = await this.simulateDiffusionStep(s_t);
+            if (!isFiniteVector(baseState)) {
+                throw new Error("Base state for sensitivity analysis is non-finite.");
+            }
+        } catch (e) {
+            logger.error('Sheaf.computeStructuralSensitivity: Could not compute base state.', e);
+            this.structural_sensitivity = 0;
+            return 0;
+        }
+
+        let totalSensitivity = 0;
+        let perturbationCount = 0;
+
+        const originalAdjacency = this.adjacencyMatrix.map(row => new Float32Array(row));
+
+        // Fix: Cache Lfull for efficiency
+        const N = this.graph.vertices.length * this.qDim;
+        const baseLfull = zeroMatrix(N, N);
+        const idx = new Map(this.graph.vertices.map((v, i) => [v, i]));
+        const eta = this.gamma / Math.max(1, this.maxEigApprox);
+
+        for (const [u, v] of this.graph.edges) {
+            const i = idx.get(u), j = idx.get(v);
+            if (i === undefined || j === undefined) continue;
+            const weight = this.adjacencyMatrix[i]?.[j] || 0;
+            if (!Number.isFinite(weight) || weight <= 0) continue;
+            const P_uv = this.projectionMatrices.get(`${u}-${v}`) || identity(this.qDim);
+            for (let qi = 0; qi < this.qDim; qi++) {
+                for (let qj = 0; qj < this.qDim; qj++) {
+                    let val = -weight * (P_uv[qi]?.[qj] || 0);
+                    if (qi !== qj) val += 0.1 * Math.sin(qi - qj) * weight;
+                    if (Number.isFinite(val)) {
+                        baseLfull[i * this.qDim + qi][j * this.qDim + qj] = clamp(val, -100, 100);
+                        baseLfull[j * this.qDim + qi][i * this.qDim + qj] = clamp(val, -100, 100);
+                    }
+                }
+            }
+        }
+
+        for (let i = 0; i < this.graph.vertices.length; i++) {
+            let degree = 0;
+            for (let j = 0; j < this.graph.vertices.length; j++) {
+                if (i !== j && Number.isFinite(this.adjacencyMatrix[i]?.[j])) {
+                    degree += this.adjacencyMatrix[i][j];
+                }
+            }
+            for (let qi = 0; qi < this.qDim; qi++) {
+                baseLfull[i * this.qDim + qi][i * this.qDim + qi] = clamp(degree + this.eps, -100, 100);
+            }
+        }
+
+        for (let eIdx = 0; eIdx < numEdges; eIdx++) {
+            const [u, v] = this.graph.edges[eIdx];
+            const i = this.graph.vertices.indexOf(u);
+            const j = this.graph.vertices.indexOf(v);
+            if (i < 0 || j < 0) continue;
+
+            const originalWeight = originalAdjacency[i][j];
+            this.adjacencyMatrix[i][j] = this.adjacencyMatrix[j][i] = clamp(originalWeight + perturbationScale, 0.01, 1);
+
+            // Fix: Update Lfull for perturbed edge only
+            const Lfull = baseLfull.map(row => new Float32Array(row));
+            const weight = this.adjacencyMatrix[i][j];
+            const P_uv = this.projectionMatrices.get(`${u}-${v}`) || identity(this.qDim);
+            for (let qi = 0; qi < this.qDim; qi++) {
+                for (let qj = 0; qj < this.qDim; qj++) {
+                    let val = -weight * (P_uv[qi]?.[qj] || 0);
+                    if (qi !== qj) val += 0.1 * Math.sin(qi - qj) * weight;
+                    if (Number.isFinite(val)) {
+                        Lfull[i * this.qDim + qi][j * this.qDim + qj] = clamp(val, -100, 100);
+                        Lfull[j * this.qDim + qi][i * this.qDim + qj] = clamp(val, -100, 100);
+                    }
+                }
+            }
+            // Update diagonal
+            for (let k = 0; k < this.graph.vertices.length; k++) {
+                let degree = 0;
+                for (let m = 0; m < this.graph.vertices.length; m++) {
+                    if (k !== m && Number.isFinite(this.adjacencyMatrix[k]?.[m])) {
+                        degree += this.adjacencyMatrix[k][m];
+                    }
+                }
+                for (let qi = 0; qi < this.qDim; qi++) {
+                    Lfull[k * this.qDim + qi][k * this.qDim + qi] = clamp(degree + this.eps, -100, 100);                    Lfull[k * this.qDim + qi][k * this.qDim + qi] = clamp(degree + this.eps, -100, 100);
+                }
+            }
+
+            const A_perturbed = zeroMatrix(N, N).map((row, i) => row.map((v, j) => {
+                const val = (i === j ? 1 : 0) - eta * (Lfull[i][j] || 0);
+                return Number.isFinite(val) ? clamp(val, -100, 100) : 0;
+            }));
+
+            let perturbedState;
+            try {
+                if (GPU) {
+                    const gpu = new GPU();
+                    const matMul = gpu.createKernel(function(A, b) {
+                        let sum = 0;
+                        for (let j = 0; j < this.constants.N; j++) {
+                            sum += A[this.thread.y][j] * b[j];
+                        }
+                        return sum;
+                    }).setOutput([N]).setConstants({ N });
+                    perturbedState = matMul(A_perturbed, s_t);
+                    gpu.destroy();
+                } else {
+                    perturbedState = await runWorkerTask('matVecMul', {
+                        matrix: flattenMatrix(A_perturbed).flatData,
+                        vector: s_t
+                    }, 5000);
+                }
+                if (!isFiniteVector(perturbedState)) {
+                    logger.warn(`Sheaf.computeStructuralSensitivity: Non-finite perturbed state for edge ${u}-${v}. Skipping.`);
+                    continue;
+                }
+                perturbedState = new Float32Array(perturbedState.map(v => clamp(v, -1, 1)));
+
+                const diff = vecSub(perturbedState, baseState);
+                const diffNorm = norm2(diff);
+                if (Number.isFinite(diffNorm)) {
+                    totalSensitivity += diffNorm / perturbationScale;
+                    perturbationCount++;
+                }
+            } catch (e) {
+                logger.warn(`Sheaf.computeStructuralSensitivity: Error for edge ${u}-${v}: ${e.message}`);
+            } finally {
+                // Restore original adjacency matrix
+                this.adjacencyMatrix[i][j] = this.adjacencyMatrix[j][i] = originalWeight;
+            }
+        }
+
+        this.structural_sensitivity = perturbationCount > 0 ? clamp(totalSensitivity / perturbationCount, 0, 10) : 0;
+        return this.structural_sensitivity;
+    }
+
+        async _updateDerivedMetrics() {
+        try {
+            // Compute gluing inconsistency and gestalt unity
+            await this.computeGluingInconsistency();
+            await this.computeGestaltUnity();
+
+            // Compute integrated information (phi)
+            await this.computeIntegratedInformation();
+
+            // Compute cup product intensity
+            await this.computeCupProduct();
+
+            // Compute structural sensitivity
+            await this.computeStructuralSensitivity(0.05, 10);
+
+            // Compute feel intensity (average stalk norm)
+            let totalNorm = 0;
+            let validVertices = 0;
+            for (const stalk of this.stalks.values()) {
+                if (isFiniteVector(stalk)) {
+                    totalNorm += norm2(stalk);
+                    validVertices++;
+                }
+            }
+            this.feel_F = validVertices > 0 ? clamp(totalNorm / validVertices, 0, 1) : 0;
+
+            // Compute intentionality (cosine similarity with qInput)
+            let totalSimilarity = 0;
+            validVertices = 0;
+            if (this.qInput && isFiniteVector(this.qInput)) {
+                for (let i = 0; i < this.graph.vertices.length; i++) {
+                    const stalk = this.stalks.get(this.graph.vertices[i]);
+                    if (!isFiniteVector(stalk)) continue;
+                    const q_i = new Float32Array(this.qDim).fill(this.qInput[i] || 0);
+                    const norm_s = norm2(stalk);
+                    const norm_q = norm2(q_i);
+                    if (norm_s > this.eps && norm_q > this.eps) {
+                        const similarity = Math.abs(dot(stalk, q_i) / (norm_s * norm_q));
+                        if (Number.isFinite(similarity)) {
+                            totalSimilarity += similarity;
+                            validVertices++;
+                        }
+                    }
+                }
+            }
+            this.intentionality_F = validVertices > 0 ? clamp(totalSimilarity / validVertices, 0, 1) : 0;
+
+            // Compute diffusion energy
+            const s = this.getStalksAsVector();
+            if (isFiniteVector(s)) {
+                const L_dense = this._csrToDense(this.laplacian);
+                const energy = await runWorkerTask('quadraticForm', {
+                    matrix: flattenMatrix(L_dense).flatData,
+                    vector: s
+                }, 5000);
+                this.diffusionEnergy = Number.isFinite(energy) ? clamp(energy, 0, 100) : 0;
+            } else {
+                this.diffusionEnergy = 0;
+            }
+
+        } catch (e) {
+            logger.error(`Sheaf._updateDerivedMetrics: Error updating metrics: ${e.message}`, { stack: e.stack });
+            this.feel_F = 0;
+            this.intentionality_F = 0;
+            this.cup_product_intensity = 0;
+            this.structural_sensitivity = 0;
+            this.diffusionEnergy = 0;
+        }
+    }
+
+
+    async update(state, stepCount = 0) {
+        if (!this.ready) {
+            logger.warn('Sheaf.update: Sheaf not ready. Attempting re-initialization.');
+            await this.initialize();
+            if (!this.ready) {
+                logger.error('Sheaf.update: Initialization failed. Aborting update.');
+                return;
+            }
+        }
+
+        if (!isFiniteVector(state) || state.length !== this.stateDim) {
+            logger.warn('Sheaf.update: Invalid input state. Skipping update.', { state });
             return;
         }
 
-        let MI_val = logDeterminantFromDiagonal(cov);
-        let MI = Number.isFinite(MI_val) ? Math.abs(MI_val) * 0.1 + 1e-6 : 1e-6;
-        if (!Number.isFinite(MI)) {
-            console.warn('Sheaf.computeIntegratedInformation: MI value is non-finite. Setting to 1e-6.', MI);
-            logger.warn('Sheaf.computeIntegratedInformation: MI value is non-finite. Setting to 1e-6.');
-            MI = 1e-6;
-        }
-
-        const safeStability = Number.isFinite(this.stability) ? this.stability : 0.1;
-        const safeGestaltUnity = Number.isFinite(this.gestaltUnity) ? this.gestaltUnity : 0.1;
-        const safeInconsistency = Number.isFinite(this.inconsistency) ? this.inconsistency : 1.0;
-
-        const cohomologyBoost = 1 + 0.1 * (this.h1Dimension || 0);
-        this.phi = clamp(Math.log(1 + MI) * safeStability * safeGestaltUnity * Math.exp(-safeInconsistency) * cohomologyBoost * (1 + 0.05 * (this.h1Dimension || 0)), 0.01, 10);
-        if (!Number.isFinite(this.phi)) {
-            console.error('Sheaf: Final Phi is non-finite. Setting to 0.01.', this.phi);
-            logger.error('Sheaf: Final Phi is non-finite. Setting to 0.01.');
-            this.phi = 0.01;
-        }
-        console.log(`Sheaf.computeIntegratedInformation: Phi calculated: ${this.phi.toFixed(5)} (MI: ${MI.toFixed(5)}, Stability: ${safeStability.toFixed(3)}, Unity: ${safeGestaltUnity.toFixed(3)}, Inconsistency: ${safeInconsistency.toFixed(3)}, H1: ${this.h1Dimension.toFixed(2)})`); // Debugging
-    }
-
-    visualizeActivity() {
-        this.graph.vertices.forEach((vertexName, idx) => {
-            const el = document.getElementById(`vertex-${idx}`);
-            if (!el) return;
-            const stalk = this.stalks.get(vertexName) || vecZeros(this.qDim);
-            const norm = norm2(stalk);
-            const intensity = Number.isFinite(norm) ? clamp(norm / Math.sqrt(this.qDim), 0, 1) : 0;
-            el.classList.toggle('active', intensity > 0.5);
-
-            if (intensity > 0.5) {
-                el.style.background = `radial-gradient(circle, #00ff99, #00cc66)`;
-            } else {
-                el.style.background = `radial-gradient(circle, #ff6b6b, #e74c3c)`;
+        try {
+            await this.diffuseQualia(state);
+            
+            if (stepCount > 0 && stepCount % 100 === 0) {
+                await this.adaptSheafTopology(100, stepCount);
             }
-        });
+        } catch (e) {
+            logger.error(`Sheaf.update: Error during update: ${e.message}`, { stack: e.stack });
+            this.ready = false;
+        }
     }
 
-    async tuneParameters() {
-        const currentStability = Number.isFinite(this.stability) ? this.stability : 0.5;
-        const currentInconsistency = Number.isFinite(this.inconsistency) ? this.inconsistency : 0.5;
-        const currentGestaltUnity = Number.isFinite(this.gestaltUnity) ? this.gestaltUnity : 0.5;
-        const currentH1Dimension = Number.isFinite(this.h1Dimension) ? this.h1Dimension : 1.0;
-
-        this.alpha = clamp(this.alpha * (1 + 0.02 * (1 - currentStability)) * (1 + 0.01 * currentInconsistency) * (1 + 0.005 * currentH1Dimension), 0.01, 1);
-        this.beta = clamp(this.beta * (1 + 0.02 * (1 - currentGestaltUnity)) * (1 - 0.01 * currentH1Dimension), 0.01, 1);
-        this.gamma = clamp(this.gamma * (1 - 0.05 * currentH1Dimension) * (1 - 0.02 * currentInconsistency) * (1 + 0.01 * currentStability), 0.01, 0.5);
-
-        if (!Number.isFinite(this.alpha)) { console.error('Sheaf: alpha became non-finite during tuning. Resetting to 0.1.'); logger.error('Sheaf: alpha became non-finite during tuning. Resetting to 0.1.'); this.alpha = 0.1; }
-        if (!Number.isFinite(this.beta)) { console.error('Sheaf: beta became non-finite during tuning. Resetting to 0.1.'); logger.error('Sheaf: beta became non-finite during tuning. Resetting to 0.1.'); this.beta = 0.1; }
-        if (!Number.isFinite(this.gamma)) { console.error('Sheaf: gamma became non-finite during tuning. Resetting to 0.05.'); logger.error('Sheaf: gamma became non-finite during tuning. Resetting to 0.05.'); this.gamma = 0.05; }
-
-        logger.info(`Sheaf parameters tuned: alpha=${this.alpha.toFixed(3)}, beta=${this.beta.toFixed(3)}, gamma=${this.gamma.toFixed(3)}`);
-    }
-
-    async testTopologyAdaptation(steps = 100) {
-        const initialEdges = this.graph.edges.length;
-        const initialTriangles = this.simplicialComplex.triangles.length;
-        const initialH1 = this.h1Dimension;
-
-        for (let i = 0; i < steps; i++) {
-            const fakeState = new Float32Array(this.stateDim).map(() => (Math.random() - 0.5) * 2);
-            await this.diffuseQualia(fakeState);
-            await this.adaptSheafTopology(10, i * 10);
+    visualizeActivity(scene, camera, renderer) {
+        if (!THREE) {
+            logger.error("Sheaf.visualizeActivity: THREE.js is not available.");
+            return;
         }
 
-        const edgeDelta = this.graph.edges.length - initialEdges;
-        const triDelta = this.simplicialComplex.triangles.length - initialTriangles;
-        const h1Delta = this.h1Dimension - initialH1;
+        const stalkGroup = new THREE.Group();
+        const vertexMap = new Map(this.graph.vertices.map((v, i) => [v, i]));
+        const sphereGeometry = new THREE.SphereGeometry(0.5, 16, 16);
 
-        logger.info(`Topology test: edges=${this.graph.edges.length} (${edgeDelta > 0 ? '+' : ''}${edgeDelta}), triangles=${this.simplicialComplex.triangles.length} (${triDelta > 0 ? '+' : ''}${triDelta}), h1Delta=${h1Delta.toFixed(2)}`);
-        return { edgeDelta, triDelta, h1Delta };
+        this.stalks.forEach((stalk, v) => {
+            const norm = isFiniteVector(stalk) ? norm2(stalk) : 0;
+            const material = new THREE.MeshPhongMaterial({
+                color: new THREE.Color(0.2, 0.5 + norm * 0.5, 1.0),
+                emissive: new THREE.Color(0, norm * 0.2, 0.2)
+            });
+            const sphere = new THREE.Mesh(sphereGeometry, material);
+            sphere.position.set(vertexMap.get(v) * 2 - 7, norm * 2, 0);
+            stalkGroup.add(sphere);
+        });
+
+        this.graph.edges.forEach(([u, v, weight]) => {
+            const i = vertexMap.get(u);
+            const j = vertexMap.get(v);
+            const norm_u = norm2(this.stalks.get(u) || [0]);
+            const norm_v = norm2(this.stalks.get(v) || [0]);
+
+            const geometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(i * 2 - 7, norm_u * 2, 0),
+                new THREE.Vector3(j * 2 - 7, norm_v * 2, 0)
+            ]);
+            const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({
+                color: 0x44aaFF,
+                transparent: true,
+                opacity: clamp((weight || 0) * this.cup_product_intensity, 0.2, 0.8)
+            }));
+            stalkGroup.add(line);
+        });
+
+        scene.add(stalkGroup);
+        return stalkGroup;
+    }
+
+    saveState() {
+        return {
+            graph: { ...this.graph },
+            simplicialComplex: { ...this.simplicialComplex },
+            stalks: Array.from(this.stalks.entries()),
+            projectionMatrices: Array.from(this.projectionMatrices.entries()),
+            correlationMatrix: this.correlationMatrix,
+            adjacencyMatrix: this.adjacencyMatrix,
+            laplacian: this.laplacian,
+            phi: this.phi,
+            h1Dimension: this.h1Dimension,
+            gestaltUnity: this.gestaltUnity,
+            stability: this.stability,
+            diffusionEnergy: this.diffusionEnergy,
+            inconsistency: this.inconsistency,
+            feel_F: this.feel_F,
+            intentionality_F: this.intentionality_F,
+            cup_product_intensity: this.cup_product_intensity,
+            structural_sensitivity: this.structural_sensitivity
+        };
+    }
+
+    loadState(state) {
+        if (!state) return;
+        this.graph = { ...state.graph };
+        this.simplicialComplex = { ...state.simplicialComplex };
+        this.stalks = new Map(state.stalks);
+        this.projectionMatrices = new Map(state.projectionMatrices);
+        this.correlationMatrix = state.correlationMatrix;
+        this.adjacencyMatrix = state.adjacencyMatrix;
+        this.laplacian = state.laplacian;
+        this.phi = state.phi;
+        this.h1Dimension = state.h1Dimension;
+        this.gestaltUnity = state.gestaltUnity;
+        this.stability = state.stability;
+        this.diffusionEnergy = state.diffusionEnergy;
+        this.inconsistency = state.inconsistency;
+        this.feel_F = state.feel_F;
+        this.intentionality_F = state.intentionality_F;
+        this.cup_product_intensity = state.cup_product_intensity;
+        this.structural_sensitivity = state.structural_sensitivity;
+        this.edgeSet = new Set(this.graph.edges.map(e => e.slice(0, 2).sort().join(',')));
+        this.ready = true;
     }
 }
+export default EnhancedQualiaSheaf;
