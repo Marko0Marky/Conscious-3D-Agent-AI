@@ -1,4 +1,7 @@
 
+// --- START OF FILE three-dee-game.js ---
+
+
 import { clamp, logger } from './utils.js';
 import { LevelGenerator } from './level-generator.js';
 import * as THREE from 'three';
@@ -61,9 +64,13 @@ export class ThreeDeeGame {
 
     normalizeAngle(angle) {
         const twoPi = 2 * Math.PI;
-        angle = angle % twoPi;
-        if (angle < 0) angle += twoPi;
-        return Number.isFinite(angle) ? angle : 0;
+        const normalized = angle % twoPi;
+        // FIX: Ensure normalized angle is always finite and within [0, 2pi)
+        if (Number.isFinite(normalized)) {
+            return normalized < 0 ? normalized + twoPi : normalized;
+        }
+        logger.error(`normalizeAngle: Input angle ${angle} resulted in non-finite normalized angle. Returning 0.`);
+        return 0; // Fallback to 0 if angle is non-finite
     }
 
     reset() {
@@ -139,8 +146,14 @@ export class ThreeDeeGame {
         this.player = new THREE.Mesh(playerGeom, playerMat);
         this.player.castShadow = true;
         this.player.name = 'player';
-        this.player.position.copy(levelData.spawnPoints.player);
-        this.player.position.y = 2;
+        // FIX: Ensure positions are finite before assignment, and clamp
+        if (Number.isFinite(levelData.spawnPoints.player.x) && Number.isFinite(levelData.spawnPoints.player.z)) {
+            this.player.position.copy(levelData.spawnPoints.player);
+            this.player.position.y = 2;
+        } else {
+            logger.error('Reset: Player spawn point is non-finite. Defaulting to (0,2,0).');
+            this.player.position.set(0,2,0);
+        }
         this.player.rotation.y = this.normalizeAngle(Math.random() * 2 * Math.PI); // Random initial rotation
         this.scene.add(this.player);
         this.collidables.push(this.player);
@@ -150,8 +163,14 @@ export class ThreeDeeGame {
         this.ai = new THREE.Mesh(aiGeom, aiMat);
         this.ai.castShadow = true;
         this.ai.name = 'ai';
-        this.ai.position.copy(levelData.spawnPoints.ai);
-        this.ai.position.y = 2;
+        // FIX: Ensure positions are finite before assignment, and clamp
+        if (Number.isFinite(levelData.spawnPoints.ai.x) && Number.isFinite(levelData.spawnPoints.ai.z)) {
+            this.ai.position.copy(levelData.spawnPoints.ai);
+            this.ai.position.y = 2;
+        } else {
+            logger.error('Reset: AI spawn point is non-finite. Defaulting to (0,2,0).');
+            this.ai.position.set(0,2,0);
+        }
         this.ai.rotation.y = this.normalizeAngle(Math.random() * 2 * Math.PI); // Random initial rotation
         this.scene.add(this.ai);
         this.collidables.push(this.ai);
@@ -160,8 +179,14 @@ export class ThreeDeeGame {
         const pTargetMat = new THREE.MeshStandardMaterial({ color: 0xff9900, emissive: 0xaa6600 });
         this.playerTarget = new THREE.Mesh(pTargetGeom, pTargetMat);
         this.playerTarget.name = 'playerTarget';
-        this.playerTarget.position.copy(levelData.targetPoints.player);
-        this.playerTarget.position.y = 3;
+        // FIX: Ensure positions are finite before assignment, and clamp
+        if (Number.isFinite(levelData.targetPoints.player.x) && Number.isFinite(levelData.targetPoints.player.z)) {
+            this.playerTarget.position.copy(levelData.targetPoints.player);
+            this.playerTarget.position.y = 3;
+        } else {
+            logger.error('Reset: Player target point is non-finite. Defaulting to (0,3,0).');
+            this.playerTarget.position.set(0,3,0);
+        }
         this.scene.add(this.playerTarget);
         this.collidables.push(this.playerTarget);
 
@@ -169,8 +194,14 @@ export class ThreeDeeGame {
         const aiTargetMat = new THREE.MeshStandardMaterial({ color: 0x44aaff, emissive: 0x2288dd });
         this.aiTarget = new THREE.Mesh(aiTargetGeom, aiTargetMat);
         this.aiTarget.name = 'aiTarget';
-        this.aiTarget.position.copy(levelData.targetPoints.ai);
-        this.aiTarget.position.y = 3;
+        // FIX: Ensure positions are finite before assignment, and clamp
+        if (Number.isFinite(levelData.targetPoints.ai.x) && Number.isFinite(levelData.targetPoints.ai.z)) {
+            this.aiTarget.position.copy(levelData.targetPoints.ai);
+            this.aiTarget.position.y = 3;
+        } else {
+            logger.error('Reset: AI target point is non-finite. Defaulting to (0,3,0).');
+            this.aiTarget.position.set(0,3,0);
+        }
         this.scene.add(this.aiTarget);
         this.collidables.push(this.aiTarget);
         
@@ -188,29 +219,45 @@ export class ThreeDeeGame {
         const minTargetDistance = 10;
 
         while (!newPosFound && attempts < maxAttempts) {
-            const tx = clamp((Math.random() - 0.5) * spawnRadius, -worldHalf + 5, worldHalf - 5);
-            const tz = clamp((Math.random() - 0.5) * spawnRadius, -worldHalf + 5, worldHalf - 5);
+            const tx_raw = (Math.random() - 0.5) * spawnRadius;
+            const tz_raw = (Math.random() - 0.5) * spawnRadius;
+            const tx = clamp(tx_raw, -worldHalf + 5, worldHalf - 5);
+            const tz = clamp(tz_raw, -worldHalf + 5, worldHalf - 5);
+
+            // FIX: Validate generated coordinates immediately
+            if (!Number.isFinite(tx) || !Number.isFinite(tz)) {
+                 logger.warn(`respawnTarget: Generated non-finite coordinates for ${target.name}. Retrying.`);
+                 attempts++;
+                 continue;
+            }
+            
             const potentialPos = new THREE.Vector3(tx, 3, tz);
 
             let tooClose = false;
-            if (potentialPos.distanceTo(this.player.position) < minTargetDistance ||
-                potentialPos.distanceTo(this.ai.position) < minTargetDistance) {
-                tooClose = true;
-            }
-            if (target === this.playerTarget && potentialPos.distanceTo(this.aiTarget.position) < minTargetDistance) {
-                tooClose = true;
-            }
-            if (target === this.aiTarget && potentialPos.distanceTo(this.playerTarget.position) < minTargetDistance) {
-                tooClose = true;
-            }
-            for (const obstacle of this.obstacles) {
-                const obstacleBB = new THREE.Box3().setFromObject(obstacle);
-                const targetBB = new THREE.Box3().setFromCenterAndSize(potentialPos, new THREE.Vector3(6, 6, 6));
-                if (obstacleBB.intersectsBox(targetBB)) {
+            if (!Number.isFinite(potentialPos.x) || !Number.isFinite(potentialPos.z)) {
+                 logger.warn(`respawnTarget: Potential position for ${target.name} is non-finite. Skipping collision checks.`);
+                 tooClose = true; // Treat as too close if non-finite
+            } else {
+                if (potentialPos.distanceTo(this.player.position) < minTargetDistance ||
+                    potentialPos.distanceTo(this.ai.position) < minTargetDistance) {
                     tooClose = true;
-                    break;
+                }
+                if (target === this.playerTarget && potentialPos.distanceTo(this.aiTarget.position) < minTargetDistance) {
+                    tooClose = true;
+                }
+                if (target === this.aiTarget && potentialPos.distanceTo(this.playerTarget.position) < minTargetDistance) {
+                    tooClose = true;
+                }
+                for (const obstacle of this.obstacles) {
+                    const obstacleBB = new THREE.Box3().setFromObject(obstacle);
+                    const targetBB = new THREE.Box3().setFromCenterAndSize(potentialPos, new THREE.Vector3(6, 6, 6));
+                    if (obstacleBB.intersectsBox(targetBB)) {
+                        tooClose = true;
+                        break;
+                    }
                 }
             }
+
 
             if (!tooClose) {
                 target.position.copy(potentialPos);
@@ -222,6 +269,11 @@ export class ThreeDeeGame {
         if (!newPosFound) {
             logger.warn(`Could not find a clear spot for ${target.name} respawn after ${maxAttempts} attempts. Placing at (0,3,0).`);
             target.position.set(0, 3, 0);
+            // FIX: Ensure fallback position is finite
+            if (!Number.isFinite(target.position.x) || !Number.isFinite(target.position.z)) {
+                 logger.error(`respawnTarget: Fallback position for ${target.name} is non-finite! Resetting to (0,3,0).`);
+                 target.position.set(0,3,0);
+            }
         }
     }
 
@@ -230,6 +282,21 @@ export class ThreeDeeGame {
         let pReward = 0;
 
         const worldHalf = ThreeDeeGame.WORLD_SIZE / 2 - 2;
+
+        // FIX: Add explicit checks for agent/target positions before clamping and distance calculations
+        const sanitizePosition = (pos, name) => {
+            if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y) || !Number.isFinite(pos.z)) {
+                logger.error(`update: Non-finite position for ${name} detected. Resetting to (0,2,0).`, {pos});
+                pos.set(0, 2, 0); // Reset to a safe, finite default
+            }
+            return pos;
+        };
+        sanitizePosition(this.player.position, 'player');
+        sanitizePosition(this.ai.position, 'ai');
+        sanitizePosition(this.playerTarget.position, 'playerTarget');
+        sanitizePosition(this.aiTarget.position, 'aiTarget');
+
+
         this.player.position.x = clamp(this.player.position.x, -worldHalf, worldHalf);
         this.player.position.z = clamp(this.player.position.z, -worldHalf, worldHalf);
         this.ai.position.x = clamp(this.ai.position.x, -worldHalf, worldHalf);
@@ -244,8 +311,18 @@ export class ThreeDeeGame {
             if (aiBB.intersectsBox(obstacleBB)) aReward -= 0.05;
         }
 
-        const pDist = this.player.position.distanceTo(this.playerTarget.position);
-        const aDist = this.ai.position.distanceTo(this.aiTarget.position);
+        // FIX: Ensure pDist and aDist are finite before use
+        let pDist = this.player.position.distanceTo(this.playerTarget.position);
+        let aDist = this.ai.position.distanceTo(this.aiTarget.position);
+
+        if (!Number.isFinite(pDist)) {
+            logger.warn(`update: player distance is non-finite. Setting to 0.`);
+            pDist = 0;
+        }
+        if (!Number.isFinite(aDist)) {
+            logger.warn(`update: AI distance is non-finite. Setting to 0.`);
+            aDist = 0;
+        }
 
         pReward -= pDist * 0.001;
         aReward -= aDist * 0.001;
@@ -263,8 +340,9 @@ export class ThreeDeeGame {
             this.playSound('win');
         }
 
+        // Final sanity check for rewards (already exists, but better with preceding fixes)
         if (!Number.isFinite(aReward) || !Number.isFinite(pReward)) {
-            logger.warn(`Invalid rewards: aReward=${aReward}, pReward=${pReward}, resetting to 0`);
+            logger.warn(`Invalid rewards AFTER all calculations: aReward=${aReward}, pReward=${pReward}. Resetting to 0.`);
             aReward = 0;
             pReward = 0;
         }
@@ -345,9 +423,24 @@ export class ThreeDeeGame {
             return;
         }
 
+        let currentRotY = this.normalizeAngle(object.rotation.y); // Use normalized angle
+        if (!Number.isFinite(currentRotY)) {
+             logger.error(`applyActionToObject: Non-finite rotation for ${object.name}. Resetting to 0.`);
+             currentRotY = 0;
+             object.rotation.y = 0;
+        }
+
         if (forward === 1) {
-            object.position.x += Math.sin(this.normalizeAngle(object.rotation.y)) * ThreeDeeGame.AGENT_SPEED;
-            object.position.z += Math.cos(this.normalizeAngle(object.rotation.y)) * ThreeDeeGame.AGENT_SPEED;
+            const dx = Math.sin(currentRotY) * ThreeDeeGame.AGENT_SPEED;
+            const dz = Math.cos(currentRotY) * ThreeDeeGame.AGENT_SPEED;
+            
+            // FIX: Validate dx, dz before adding to position
+            if (Number.isFinite(dx) && Number.isFinite(dz)) {
+                object.position.x += dx;
+                object.position.z += dz;
+            } else {
+                logger.warn(`applyActionToObject: Non-finite movement vector for ${object.name}. Skipping position update.`);
+            }
         }
         if (left === 1) {
             object.rotation.y += ThreeDeeGame.AGENT_TURN_SPEED;
@@ -359,10 +452,18 @@ export class ThreeDeeGame {
         object.rotation.y = this.normalizeAngle(object.rotation.y);
 
         if (object && object.isObject3D) {
+            // FIX: Validate object's position BEFORE creating bounding box and collision checks
+            if (!Number.isFinite(object.position.x) || !Number.isFinite(object.position.y) || !Number.isFinite(object.position.z)) {
+                logger.error(`applyActionToObject: Non-finite position for ${object.name} after movement. Resetting to prevPosition.`);
+                object.position.copy(prevPosition); // Revert to known good position
+                return; // Skip collision checks if position is bad
+            }
+
             const agentBB = new THREE.Box3().setFromObject(object);
             for (const obstacle of this.obstacles) {
                 if (obstacle && obstacle.isObject3D) {
-                    if (agentBB.intersectsBox(new THREE.Box3().setFromObject(obstacle))) {
+                    const obstacleBB = new THREE.Box3().setFromObject(obstacle); // Assuming obstacle positions are always finite
+                    if (agentBB.intersectsBox(obstacleBB)) {
                         object.position.copy(prevPosition);
                         break;
                     }
@@ -371,51 +472,31 @@ export class ThreeDeeGame {
         }
     }
 
-    // ThreeDeeGame.js
-async update(agentAction, playerAction) {
-    this.applyAction(this.ai, agentAction.action);
-    this.applyAction(this.player, playerAction);
-    const state = this.getState();
-    await this.qualiaSheaf.diffuseQualia(state);
-    if (this.qualiaSheaf.ready) {
-        await this.qualiaSheaf.computeStructuralSensitivity();
-        this.qualiaSheaf.visualizeActivity(this.scene, this.camera, this.renderer);
-    }
-    if (this.checkCollision(this.ai, this.aiTarget)) {
-        this.score.ai += 1;
-        this.playSound('win');
-        this.resetTargets();
-    }
-    if (this.checkCollision(this.player, this.playerTarget)) {
-        this.score.player += 1;
-        this.playSound('win');
-        this.resetTargets();
-    }
-    logger.info(`Game update: AI score=${this.score.ai}, Player score=${this.score.player}, phi=${this.qualiaSheaf.phi.toFixed(3)}`);
-    this.render();
-}
-
     getState() {
+        // FIX: Sanitize all state values before returning
+        const sanitizeCoord = (val) => Number.isFinite(val) ? val : 0;
+        const sanitizeRot = (val) => this.normalizeAngle(val);
+
         const state = {
             player: { 
-                x: Number.isFinite(this.player.position.x) ? this.player.position.x : 0, 
-                z: Number.isFinite(this.player.position.z) ? this.player.position.z : 0, 
-                rot: this.normalizeAngle(this.player.rotation.y) 
+                x: sanitizeCoord(this.player.position.x), 
+                z: sanitizeCoord(this.player.position.z), 
+                rot: sanitizeRot(this.player.rotation.y) 
             },
             ai: { 
-                x: Number.isFinite(this.ai.position.x) ? this.ai.position.x : 0, 
-                z: Number.isFinite(this.ai.position.z) ? this.ai.position.z : 0, 
-                rot: this.normalizeAngle(this.ai.rotation.y) 
+                x: sanitizeCoord(this.ai.position.x), 
+                z: sanitizeCoord(this.ai.position.z), 
+                rot: sanitizeRot(this.ai.rotation.y) 
             },
             playerTarget: { 
-                x: Number.isFinite(this.playerTarget.position.x) ? this.playerTarget.position.x : 0, 
-                z: Number.isFinite(this.playerTarget.position.z) ? this.playerTarget.position.z : 0, 
-                rot: 0 
+                x: sanitizeCoord(this.playerTarget.position.x), 
+                z: sanitizeCoord(this.playerTarget.position.z), 
+                rot: 0 // Target has no rotation
             },
             aiTarget: { 
-                x: Number.isFinite(this.aiTarget.position.x) ? this.aiTarget.position.x : 0, 
-                z: Number.isFinite(this.aiTarget.position.z) ? this.aiTarget.position.z : 0, 
-                rot: 0 
+                x: sanitizeCoord(this.aiTarget.position.x), 
+                z: sanitizeCoord(this.aiTarget.position.z), 
+                rot: 0 // Target has no rotation
             }
         };
         return state;
