@@ -87,7 +87,7 @@ export class OntologicalWorldModel {
         const anticipatoryScale = Math.sqrt(2.0 / (this.recurrentStateSize + 1));
         this.anticipatoryHead = { W: randomMatrix(1, this.recurrentStateSize, anticipatoryScale), b: vecZeros(1) };
 
-        this.attentionWeights = randomMatrix(this.qDim, this.inputDim, 0.1);
+        this.attentionWeights = randomMatrix(this.qDim, this.stateDim, 0.1);
         this.lastSoftmaxScores = vecZeros(this.qDim);
 
         this.freeEnergy = 0;
