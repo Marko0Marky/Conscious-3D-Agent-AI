@@ -224,7 +224,7 @@ export class EnhancedQualiaSheaf {
         };
         this.edgeSet = comprehensiveEdgesSet; // Assign the comprehensive set here
 
-    
+    }
     _initializeStalks() {
         this.graph.vertices.forEach(v => {
             const stalk = new Float32Array(this.qDim).fill(0).map(() => clamp((Math.random() - 0.5) * 0.5, -1, 1));
@@ -1869,4 +1869,5 @@ export class EnhancedQualiaSheaf {
 }
 
 export default EnhancedQualiaSheaf;
+
 
