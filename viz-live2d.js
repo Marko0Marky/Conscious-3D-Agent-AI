@@ -1,4 +1,3 @@
-// --- START OF FILE viz-live2d.js ---
 import { logger, clamp } from './utils.js';
 
 let pixiApp;
@@ -24,7 +23,15 @@ const HEAD_MOVEMENT_MAP = {
     'idle': { param: 'ParamAngleY', value: 0 }
 };
 
-export async function initLive2D(mainClock, sheaf) { // Added sheaf parameter
+function getDynamicScale(containerWidth) {
+    // Base scale for desktop (container width ~330px)
+    const baseScale = 0.12;
+    // Scale down proportionally for smaller screens
+    const scaleFactor = Math.min(containerWidth / 330, 1); // Normalize to desktop width
+    return clamp(baseScale * scaleFactor, 0.03, 0.12); // Min scale 0.03 for mobile, max 0.06
+}
+
+export async function initLive2D(mainClock, sheaf) {
     if (initialized) return true;
     if (typeof PIXI === 'undefined' || typeof PIXI.live2d === 'undefined') {
         logger.error('PIXI.js or PIXI.live2d library not found.');
@@ -36,7 +43,7 @@ export async function initLive2D(mainClock, sheaf) { // Added sheaf parameter
         return false;
     }
     clock = mainClock;
-    sheafInstance = sheaf; // Store sheaf instance
+    sheafInstance = sheaf;
 
     try {
         pixiApp = new PIXI.Application({
@@ -51,12 +58,16 @@ export async function initLive2D(mainClock, sheaf) { // Added sheaf parameter
         live2dModel = await PIXI.live2d.Live2DModel.from(modelPath);
         pixiApp.stage.addChild(live2dModel);
 
-        live2dModel.scale.set(0.12);
+        // Set initial scale based on container width
+        const containerWidth = container.offsetWidth;
+        live2dModel.scale.set(getDynamicScale(containerWidth));
         live2dModel.anchor.set(0.5, 0.5);
         live2dModel.position.set(pixiApp.view.width / 2, pixiApp.view.height / 2);
 
         const resizeObserver = new ResizeObserver(() => {
             if (pixiApp && live2dModel) {
+                const containerWidth = container.offsetWidth;
+                live2dModel.scale.set(getDynamicScale(containerWidth));
                 live2dModel.position.set(pixiApp.view.width / 2, pixiApp.view.height / 2);
             }
         });
@@ -72,7 +83,6 @@ export async function initLive2D(mainClock, sheaf) { // Added sheaf parameter
     }
 }
 
-// FIX: This function now expects a [1, 6] tensor containing only emotion data.
 export function updateLive2DEmotions(emotionTensor, hmLabel = 'idle') {
     if (!initialized || !live2dModel || !emotionTensor || emotionTensor.isDisposed) {
         return;
@@ -81,9 +91,7 @@ export function updateLive2DEmotions(emotionTensor, hmLabel = 'idle') {
         const emotionData = emotionTensor.arraySync();
         if (!emotionData || !emotionData[0]) return;
         
-        // FIX: The incoming data is now directly the emotions vector. No slice needed.
         const emotions = emotionData[0]; 
-        
         const normalized = emotions.map(e => clamp(e, 0, 1));
         const dominantIdx = normalized.indexOf(Math.max(...normalized));
         if (dominantIdx === -1) return;
@@ -96,7 +104,7 @@ export function updateLive2DEmotions(emotionTensor, hmLabel = 'idle') {
 
         if (dominantEmotion && dominantEmotion.param) {
             const paramValue = dominantEmotion.name === 'fear' || dominantEmotion.name === 'surprise' 
-                ? normalized[dominantIdx] * 1.0 // Eye open range is 0-1
+                ? normalized[dominantIdx] * 1.0
                 : normalized[dominantIdx];
             live2dModel.internalModel.coreModel.setParameterValueById(dominantEmotion.param, paramValue);
         }
@@ -107,19 +115,16 @@ export function updateLive2DEmotions(emotionTensor, hmLabel = 'idle') {
             live2dModel.internalModel.coreModel.setParameterValueById(moveData.param, moveData.value);
         }
     } catch (e) {
-        // FIX: Improved logging for better diagnostics
         logger.error("Error updating Live2D emotions:", { message: e.message, stack: e.stack, error: e });
     }
 }
 
 export function updateLive2D(deltaTime) {
     if (!initialized || !live2dModel || !sheafInstance) return;
-    // The PIXI.Application ticker handles rendering. We just update params.
     
-    // Link breath to Phi
-    const phiNormalized = clamp((sheafInstance.phi || 0.01) / 5.0, 0, 1); // Normalize Phi (e.g., max 5.0)
-    const breath = (Math.sin(Date.now() / 1000) + 1) / 2; // Basic breath cycle
-    const phiDrivenBreath = clamp(0.5 + breath * phiNormalized * 0.5, 0.2, 0.9); // Phi influences breath intensity/range
+    const phiNormalized = clamp((sheafInstance.phi || 0.01) / 5.0, 0, 1);
+    const breath = (Math.sin(Date.now() / 1000) + 1) / 2;
+    const phiDrivenBreath = clamp(0.5 + breath * phiNormalized * 0.5, 0.2, 0.9);
 
     live2dModel.internalModel.coreModel.setParameterValueById('ParamBreath', phiDrivenBreath);
 }
@@ -133,10 +138,9 @@ export function cleanupLive2D() {
     live2dModel = null;
     initialized = false;
     clock = null;
-    sheafInstance = null; // Clear sheaf reference
+    sheafInstance = null;
     logger.info('Live2D resources cleaned up.');
 }
 
 export { initialized as live2dInitialized };
 export function isLive2DReady() { return initialized; }
-// --- END OF FILE viz-live2d.js ---
