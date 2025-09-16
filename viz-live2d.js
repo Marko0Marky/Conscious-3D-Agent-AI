@@ -8,15 +8,17 @@ let clock;
 let sheafInstance = null; // Reference to the sheaf for Phi
 
 // FIX: EMOTION_MAP now uses indices 0-5 to match the incoming 6-element emotion vector.
+// Updated EMOTION_MAP to use parameters from the JSON configuration
 const EMOTION_MAP = {
-    0: { name: 'joy', expression: 'F01', param: 'ParamSmile' },
-    1: { name: 'fear', expression: 'F04', param: 'ParamEyeOpen' },
-    2: { name: 'curiosity', expression: 'F06', param: 'ParamBrowLAngle' },
-    3: { name: 'frustration', expression: 'F05', param: 'ParamBrowLForm' },
-    4: { name: 'calm', expression: null, param: 'ParamMouthOpenY' },
-    5: { name: 'surprise', expression: 'F02', param: 'ParamEyeOpen' }
+    0: { name: 'joy', param: 'ParamMouthOpenY', value: 0.5 }, // Slight mouth open for joy
+    1: { name: 'fear', param: ['ParamEyeLOpen', 'ParamEyeROpen'], value: 1.0 }, // Wide-open eyes for fear
+    2: { name: 'curiosity', param: ['ParamEyeLOpen', 'ParamEyeROpen'], value: 0.7 }, // Partially open eyes for curiosity
+    3: { name: 'frustration', param: 'ParamMouthOpenY', value: 0.3 }, // Slight frown-like mouth for frustration
+    4: { name: 'calm', param: 'ParamMouthOpenY', value: 0.0 }, // Closed mouth for calm
+    5: { name: 'surprise', param: ['ParamEyeLOpen', 'ParamEyeROpen'], value: 1.0 } // Wide-open eyes for surprise
 };
 
+// HEAD_MOVEMENT_MAP remains mostly correct but is included for completeness
 const HEAD_MOVEMENT_MAP = {
     'nod': { param: 'ParamAngleY', value: 15 },
     'shake': { param: 'ParamAngleX', value: -15 },
@@ -98,15 +100,16 @@ export function updateLive2DEmotions(emotionTensor, hmLabel = 'idle') {
 
         const dominantEmotion = EMOTION_MAP[dominantIdx];
 
-        if (dominantEmotion && dominantEmotion.expression && live2dModel.expression !== dominantEmotion.expression) {
-            live2dModel.expression(dominantEmotion.expression);
-        }
-
         if (dominantEmotion && dominantEmotion.param) {
-            const paramValue = dominantEmotion.name === 'fear' || dominantEmotion.name === 'surprise' 
-                ? normalized[dominantIdx] * 1.0
-                : normalized[dominantIdx];
-            live2dModel.internalModel.coreModel.setParameterValueById(dominantEmotion.param, paramValue);
+            const paramValue = normalized[dominantIdx] * (dominantEmotion.value || 1.0);
+            // Handle single parameter or array of parameters
+            if (Array.isArray(dominantEmotion.param)) {
+                dominantEmotion.param.forEach(param => {
+                    live2dModel.internalModel.coreModel.setParameterValueById(param, paramValue);
+                });
+            } else {
+                live2dModel.internalModel.coreModel.setParameterValueById(dominantEmotion.param, paramValue);
+            }
         }
 
         const movement = hmLabel || (normalized[5] > 0.7 ? 'nod' : 'idle');
@@ -122,11 +125,8 @@ export function updateLive2DEmotions(emotionTensor, hmLabel = 'idle') {
 export function updateLive2D(deltaTime) {
     if (!initialized || !live2dModel || !sheafInstance) return;
     
-    const phiNormalized = clamp((sheafInstance.phi || 0.01) / 5.0, 0, 1);
-    const breath = (Math.sin(Date.now() / 1000) + 1) / 2;
-    const phiDrivenBreath = clamp(0.5 + breath * phiNormalized * 0.5, 0.2, 0.9);
-
-    live2dModel.internalModel.coreModel.setParameterValueById('ParamBreath', phiDrivenBreath);
+    // Remove ParamBreath since it's not in the JSON; use an idle motion instead
+    live2dModel.internalModel.motionManager.startRandomMotion('Idle');
 }
 
 export function cleanupLive2D() {
