@@ -399,6 +399,7 @@
         }
         .game-container {
             padding: 10px;
+            position: relative;
         }
         #gameCanvas {
             width: 100%;
@@ -410,6 +411,40 @@
             margin-bottom: 12px;
             image-rendering: auto;
         }
+        #live2d-container {
+    position: absolute;
+    bottom: 10px;
+    right: 10px;
+    width: 330px; /* Increased from 300px to 330px (10% larger) */
+    aspect-ratio: 1/1.2;
+    background: transparent;
+    border-radius: 10px;
+    overflow: hidden;
+    z-index: 10;
+}
+#live2d-container canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Adjust for responsiveness */
+@media (max-width: 1200px) {
+    .content-grid { grid-template-columns: 1fr 1fr; }
+    .left-column { grid-column: 1 / -1; }
+    .center-column, .right-column { min-width: unset; width: 100%; }
+    #live2d-container { width: 248px; } /* Adjusted to 75% of 330px (rounded) */
+}
+@media (max-width: 800px) {
+    .content-grid { grid-template-columns: 1fr; }
+    body { padding: 10px; font-size: 12px; }
+    .header h1 { font-size: 1.5em; }
+    .header p { font-size: 0.9em; }
+    .panel, .game-container, .log-container { padding: 10px; }
+    .phi-display { font-size: 1.2em; }
+    button { min-width: unset; font-size: 0.9em; }
+    .charts-grid { grid-template-columns: 1fr; }
+    #live2d-container { width: 165px; } /* Adjusted to 50% of 330px (rounded) */
+}
         .score-container {
             display: flex;
             justify-content: space-around;
@@ -499,19 +534,6 @@
             0% { transform: scale(1.0); box-shadow: 0 0 10px rgba(255, 255, 255, 0.8); }
             50% { transform: scale(1.3); box-shadow: 0 0 15px rgba(0, 255, 153, 0.9), 0 0 20px rgba(0, 255, 153, 0.5); }
             100% { transform: scale(1.0); box-shadow: 0 0 5px rgba(0, 255, 153, 0.3); }
-        }
-        #live2d-container {
-            width: 100%;
-            aspect-ratio: 1/1.2;
-            position: relative;
-            background: radial-gradient(circle, rgba(40,20,80,0.5) 0%, rgba(10,10,21,0) 70%);
-            border-radius: 10px;
-            overflow: hidden;
-            margin-top: 10px;
-        }
-        #live2d-container canvas {
-            width: 100% !important;
-            height: 100% !important;
         }
         #concept-panel {
             width: 100%;
@@ -650,6 +672,7 @@
             .content-grid { grid-template-columns: 1fr 1fr; }
             .left-column { grid-column: 1 / -1; }
             .center-column, .right-column { min-width: unset; width: 100%; }
+            #live2d-container { width: 150px; }
         }
         @media (max-width: 800px) {
             .content-grid { grid-template-columns: 1fr; }
@@ -660,19 +683,20 @@
             .phi-display { font-size: 1.2em; }
             button { min-width: unset; font-size: 0.9em; }
             .charts-grid { grid-template-columns: 1fr; }
+            #live2d-container { width: 100px; }
         }
     </style>
 </head>
 <body role="document">
     <div class="main-container" role="main">
         <header class="header" role="banner">
-            <h1>🧠 Unified Conscious AI Simulation v7.0</h1>
+            <h1>🧠 Unified Conscious AI Simulation v7.0 (Activated Sheaf-DIT)</h1>
             <p>Integrating Sheaf-DIT with Phenomenology, Qualia Binding, and Structural Skepticism</p>
         </header>
         <div class="content-grid">
             <div class="left-column">
                 <div class="panel" role="complementary" aria-labelledby="sheaf-dit-metrics-heading">
-                    <h3 id="sheaf-dit-metrics-heading">Sheaf Metrics (Main AI)</h3>
+                    <h3 id="sheaf-dit-metrics-heading">Sheaf-DIT Metrics (Main AI)</h3>
                     <div class="framework-badge">Sheaf-DIT ⊕ OWM ⊕ Meta-Learning</div>
                     <div class="status" id="status" aria-live="polite" aria-atomic="true">Initializing...</div>
                     <div class="phi-display" id="phi-display" aria-live="polite" aria-atomic="true">Φ (UI Metric): 0.000</div>
@@ -769,15 +793,14 @@
                         <div class="loading-text" id="metricsLoadingText">Processing...</div>
                     </div>
                 </div>
-                <div class="panel">
-                    <h3>Live2D Avatar</h3>
-                    <div id="live2d-container"></div>
-                </div>
             </div>
             <div class="center-column">
                 <div class="panel game-container" role="region" aria-labelledby="game-env-heading">
                     <h3 id="game-env-heading">🤖 3D Agent Environment</h3>
-                    <canvas id="gameCanvas" role="img" aria-label="3D Game Environment with two AI agents navigating to targets"></canvas>
+                    <div style="position: relative;">
+                        <canvas id="gameCanvas" role="img" aria-label="3D Game Environment with two AI agents navigating to targets"></canvas>
+                        <div id="live2d-container" role="img" aria-label="Live2D Avatar overlay"></div>
+                    </div>
                     <div class="score-container">
                         <div class="score-metric player-score">
                             <span class="metric-label">Opponent Score:</span>
