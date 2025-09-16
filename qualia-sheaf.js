@@ -514,10 +514,18 @@ export class EnhancedQualiaSheaf {
         }
     }
 
-    adaptSimplices(corrMatrix, targetH1 = 2.0) {
+        adaptSimplices(corrMatrix, targetH1 = 2.0) {
         const deltaH1 = (this.h1Dimension || 0) - targetH1;
         const numV = this.graph.vertices.length;
         let changed = false;
+
+        // --- FIX START ---
+        // Define the core, "innate" tetrahedra that should not be removed by adaptation.
+        const protectedTetrahedra = new Set([
+            ['agent_x', 'agent_z', 'target_x', 'target_z'].sort().join(','),
+            ['agent_rot', 'dist_target', 'vec_dx', 'vec_dz'].sort().join(',')
+        ]);
+        // --- FIX END ---
 
         if (deltaH1 < -0.5 && this.gestaltUnity > 0.7) {
             const maxAddTri = 2;
@@ -598,6 +606,12 @@ export class EnhancedQualiaSheaf {
             let minCorr = Infinity;
             let tetToRemove = null;
             this.simplicialComplex.tetrahedra.forEach(tet => {
+                // --- FIX: Check if the tetrahedron is protected before considering it for removal ---
+                const tetKey = tet.sort().join(',');
+                if (protectedTetrahedra.has(tetKey)) {
+                    return; // Skip protected tetrahedra
+                }
+
                 const idxs = tet.map(v => this.graph.vertices.indexOf(v));
                 if (idxs.some(id => id === -1)) return;
                 let currentCorrSum = 0;
