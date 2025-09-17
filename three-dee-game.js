@@ -1,4 +1,3 @@
-
 // --- START OF FILE three-dee-game.js ---
 
 
@@ -64,6 +63,11 @@ export class ThreeDeeGame {
 
     normalizeAngle(angle) {
         const twoPi = 2 * Math.PI;
+        // FIX: Ensure input angle is finite before calculation
+        if (!Number.isFinite(angle)) {
+            logger.error(`normalizeAngle: Input angle ${angle} is non-finite. Returning 0.`);
+            return 0;
+        }
         const normalized = angle % twoPi;
         // FIX: Ensure normalized angle is always finite and within [0, 2pi)
         if (Number.isFinite(normalized)) {
@@ -234,6 +238,7 @@ export class ThreeDeeGame {
             const potentialPos = new THREE.Vector3(tx, 3, tz);
 
             let tooClose = false;
+            // FIX: Ensure potential position is finite before doing distance checks
             if (!Number.isFinite(potentialPos.x) || !Number.isFinite(potentialPos.z)) {
                  logger.warn(`respawnTarget: Potential position for ${target.name} is non-finite. Skipping collision checks.`);
                  tooClose = true; // Treat as too close if non-finite
@@ -268,12 +273,8 @@ export class ThreeDeeGame {
 
         if (!newPosFound) {
             logger.warn(`Could not find a clear spot for ${target.name} respawn after ${maxAttempts} attempts. Placing at (0,3,0).`);
-            target.position.set(0, 3, 0);
             // FIX: Ensure fallback position is finite
-            if (!Number.isFinite(target.position.x) || !Number.isFinite(target.position.z)) {
-                 logger.error(`respawnTarget: Fallback position for ${target.name} is non-finite! Resetting to (0,3,0).`);
-                 target.position.set(0,3,0);
-            }
+            target.position.set(0, 3, 0);
         }
     }
 
@@ -316,12 +317,12 @@ export class ThreeDeeGame {
         let aDist = this.ai.position.distanceTo(this.aiTarget.position);
 
         if (!Number.isFinite(pDist)) {
-            logger.warn(`update: player distance is non-finite. Setting to 0.`);
-            pDist = 0;
+            logger.warn(`update: player distance is non-finite. Setting to a large value.`);
+            pDist = ThreeDeeGame.WORLD_SIZE * 2;
         }
         if (!Number.isFinite(aDist)) {
-            logger.warn(`update: AI distance is non-finite. Setting to 0.`);
-            aDist = 0;
+            logger.warn(`update: AI distance is non-finite. Setting to a large value.`);
+            aDist = ThreeDeeGame.WORLD_SIZE * 2;
         }
 
         pReward -= pDist * 0.001;
@@ -340,7 +341,7 @@ export class ThreeDeeGame {
             this.playSound('win');
         }
 
-        // Final sanity check for rewards (already exists, but better with preceding fixes)
+        // Final sanity check for rewards
         if (!Number.isFinite(aReward) || !Number.isFinite(pReward)) {
             logger.warn(`Invalid rewards AFTER all calculations: aReward=${aReward}, pReward=${pReward}. Resetting to 0.`);
             aReward = 0;
@@ -354,6 +355,7 @@ export class ThreeDeeGame {
         const results = { left: 0, center: 0, right: 0 };
         const origin = agentMesh.position.clone().add(new THREE.Vector3(0, 1, 0));
         
+        // FIX: Validate origin before raycasting
         if (!Number.isFinite(origin.x) || !Number.isFinite(origin.y) || !Number.isFinite(origin.z)) {
             logger.error(`Raycast origin for ${agentMesh.name || 'agent'} is non-finite:`, origin);
             return { left: 0, center: 0, right: 0 };
@@ -362,6 +364,7 @@ export class ThreeDeeGame {
         const angles = { left: Math.PI / 4, center: 0, right: -Math.PI / 4 };
         const agentDirection = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.normalizeAngle(agentMesh.rotation.y));
         
+        // FIX: Validate base direction
         if (!Number.isFinite(agentDirection.x) || !Number.isFinite(agentDirection.y) || !Number.isFinite(agentDirection.z)) {
             logger.error(`Raycast base direction for ${agentMesh.name || 'agent'} is non-finite:`, agentDirection);
             return { left: 0, center: 0, right: 0 };
@@ -376,6 +379,7 @@ export class ThreeDeeGame {
         for (const key in angles) {
             const direction = agentDirection.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), angles[key]);
             
+            // FIX: Validate per-ray direction
             if (!Number.isFinite(direction.x) || !Number.isFinite(direction.y) || !Number.isFinite(direction.z)) {
                 logger.warn(`Ray direction for ${key} ray of ${agentMesh.name || 'agent'} is non-finite, skipping this ray.`, direction);
                 continue;
@@ -424,6 +428,7 @@ export class ThreeDeeGame {
         }
 
         let currentRotY = this.normalizeAngle(object.rotation.y); // Use normalized angle
+        // FIX: Ensure rotation is finite before use
         if (!Number.isFinite(currentRotY)) {
              logger.error(`applyActionToObject: Non-finite rotation for ${object.name}. Resetting to 0.`);
              currentRotY = 0;
@@ -462,7 +467,7 @@ export class ThreeDeeGame {
             const agentBB = new THREE.Box3().setFromObject(object);
             for (const obstacle of this.obstacles) {
                 if (obstacle && obstacle.isObject3D) {
-                    const obstacleBB = new THREE.Box3().setFromObject(obstacle); // Assuming obstacle positions are always finite
+                    const obstacleBB = new THREE.Box3().setFromObject(obstacle);
                     if (agentBB.intersectsBox(obstacleBB)) {
                         object.position.copy(prevPosition);
                         break;
