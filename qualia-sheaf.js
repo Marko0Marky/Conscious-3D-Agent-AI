@@ -2,7 +2,7 @@
 
 import {
     clamp, dot, norm2, vecAdd, vecSub, vecScale, vecZeros, zeroMatrix, isFiniteVector, isFiniteMatrix, flattenMatrix, unflattenMatrix, logDeterminantFromDiagonal,
-    logger, runWorkerTask, identity
+    logger, runWorkerTask, identity, covarianceMatrix, matVecMul, vecMul
 } from './utils.js';
 
 const Numeric = window.Numeric || null;
@@ -78,6 +78,9 @@ export class CircularBuffer {
     }
 }
 
+/**
+ * Base EnhancedQualiaSheaf – Kernel for all theoremic extensions.
+ */
 export class EnhancedQualiaSheaf {
     constructor(graphData, config = {}) {
         this.owm = null;
@@ -133,6 +136,7 @@ export class EnhancedQualiaSheaf {
         this.maxEigApprox = 1;
         this.projectionMatrices = new Map();
         this.isUpdating = false;
+        this.qInput = null; // For intentionality
 
         logger.info(`Enhanced Qualia Sheaf constructed: vertices=${this.graph.vertices.length}, edges=${this.graph.edges.length}, triangles=${this.simplicialComplex.triangles.length}, tetrahedra=${this.simplicialComplex.tetrahedra.length}`);
     }
@@ -171,7 +175,7 @@ export class EnhancedQualiaSheaf {
         let finalTrianglesUpdated = [...explicitTriangles];
         explicitTetrahedra.forEach(tet => {
             if (!Array.isArray(tet) || tet.length !== 4) return;
-            for (let i = 0; i < 4; i++) {
+                        for (let i = 0; i < 4; i++) {
                 const newTri = tet.filter((_, idx) => idx !== i).sort();
                 if (!finalTrianglesUpdated.some(t => t.slice().sort().join(',') === newTri.join(','))) {
                     finalTrianglesUpdated.push(newTri);
@@ -196,7 +200,7 @@ export class EnhancedQualiaSheaf {
         };
         this.edgeSet = allEdgesSet;
     }
-    
+
     _initializeStalks() {
         this.graph.vertices.forEach(v => {
             const stalk = new Float32Array(this.qDim).fill(0).map(() => clamp((Math.random() - 0.5) * 0.5, -1, 1));
@@ -443,13 +447,10 @@ export class EnhancedQualiaSheaf {
         }
     }
     
-        adaptEdges(corrMatrix, addThreshold, removeThreshold) {
+    adaptEdges(corrMatrix, addThreshold, removeThreshold) {
         const numVertices = this.graph.vertices.length;
         if (numVertices === 0) return;
 
-        // --- FIX START ---
-        // Create a set of "essential" edges that form the faces of our defined
-        // triangles and tetrahedra. These edges cannot be removed.
         const essentialEdges = new Set();
         this.simplicialComplex.triangles.forEach(tri => {
             if (!Array.isArray(tri) || tri.length < 3) return;
@@ -457,8 +458,6 @@ export class EnhancedQualiaSheaf {
             essentialEdges.add([tri[1], tri[2]].sort().join(','));
             essentialEdges.add([tri[0], tri[2]].sort().join(','));
         });
-        // Note: Edges of tetrahedra are automatically included as they are composed of triangles.
-        // --- FIX END ---
 
         let added = 0;
         const maxAdd = 3;
@@ -479,12 +478,10 @@ export class EnhancedQualiaSheaf {
             const i = this.graph.vertices.indexOf(u);
             const j = this.graph.vertices.indexOf(v);
             
-            // --- FIX: Check if the edge is essential before considering it for removal ---
             const edgeKey = [u, v].sort().join(',');
             
             if (i !== -1 && j !== -1 && corrMatrix[i]?.[j] !== undefined) {
                 const corrVal = corrMatrix[i][j];
-                // Only remove the edge if its correlation is low AND it is NOT essential.
                 if (corrVal < removeThreshold && !essentialEdges.has(edgeKey)) {
                     edgesToRemove.push([u, v]);
                 }
@@ -514,18 +511,15 @@ export class EnhancedQualiaSheaf {
         }
     }
 
-        adaptSimplices(corrMatrix, targetH1 = 2.0) {
+    adaptSimplices(corrMatrix, targetH1 = 2.0) {
         const deltaH1 = (this.h1Dimension || 0) - targetH1;
         const numV = this.graph.vertices.length;
         let changed = false;
 
-        // --- FIX START ---
-        // Define the core, "innate" tetrahedra that should not be removed by adaptation.
         const protectedTetrahedra = new Set([
             ['agent_x', 'agent_z', 'target_x', 'target_z'].sort().join(','),
             ['agent_rot', 'dist_target', 'vec_dx', 'vec_dz'].sort().join(',')
         ]);
-        // --- FIX END ---
 
         if (deltaH1 < -0.5 && this.gestaltUnity > 0.7) {
             const maxAddTri = 2;
@@ -606,10 +600,9 @@ export class EnhancedQualiaSheaf {
             let minCorr = Infinity;
             let tetToRemove = null;
             this.simplicialComplex.tetrahedra.forEach(tet => {
-                // --- FIX: Check if the tetrahedron is protected before considering it for removal ---
                 const tetKey = tet.sort().join(',');
                 if (protectedTetrahedra.has(tetKey)) {
-                    return; // Skip protected tetrahedra
+                    return;
                 }
 
                 const idxs = tet.map(v => this.graph.vertices.indexOf(v));
@@ -671,7 +664,7 @@ export class EnhancedQualiaSheaf {
                 return;
             }
             boundary1[eIdx][uIdx] = 1;
-            boundary1[eIdx][vIdx] = 1;
+            boundary1[eIdx][vIdx] = -1; // Signed for orientation
             nonZeroCount1 += 2;
         });
             
@@ -681,14 +674,14 @@ export class EnhancedQualiaSheaf {
             if (!Array.isArray(tri) || tri.length !== 3) return;
             const [u, v, w] = tri;
             const edges = [
-                [u, v].sort().join(','), 
-                [v, w].sort().join(','), 
-                [w, u].sort().join(',')
+                { key: [u, v].sort().join(','), sign: 1 },
+                { key: [v, w].sort().join(','), sign: -1 },
+                { key: [w, u].sort().join(','), sign: 1 }
             ];
-            edges.forEach(edgeKey => {
-                const eIdx = eMapIndices.get(edgeKey);
+            edges.forEach(({ key, sign }, idx) => {
+                const eIdx = eMapIndices.get(key);
                 if (eIdx !== undefined) {
-                    partial2[tIdx][eIdx] = 1;
+                    partial2[tIdx][eIdx] = sign;
                     nonZeroCount2++;
                 }
             });
@@ -703,13 +696,12 @@ export class EnhancedQualiaSheaf {
                 const face = sortedTet.filter((_, idx) => idx !== i).sort();
                 const tIdx = tMapIndices.get(face.join(','));
                 if (tIdx !== undefined) {
-                    partial3[tetIdx][tIdx] = 1;
+                    partial3[tetIdx][tIdx] = (i % 2 === 0 ? 1 : -1); // Alternating signs
                     nonZeroCount3++;
                 }
             }
         });
 
-        // FIX: Updated safeFlatten to ensure consistent dimension reporting from flattenMatrix
         const safeFlatten = (matrix, name) => {
             if (!isFiniteMatrix(matrix)) {
                 logger.error(`Sheaf: Non-finite matrix for ${name} boundary detected BEFORE flattening. Returning empty.`, { matrix });
@@ -718,7 +710,6 @@ export class EnhancedQualiaSheaf {
 
             const flattenedResult = flattenMatrix(matrix);
 
-            // Double check for non-finite values or length mismatches after flattening
             if (!isFiniteVector(flattenedResult.flatData)) {
                 logger.error(`Sheaf: CRITICAL: flattenMatrix for ${name} boundary produced non-finite flatData! Returning empty.`, { flattenedResult });
                 const nonFiniteIndex = flattenedResult.flatData.findIndex(val => !Number.isFinite(val));
@@ -735,7 +726,6 @@ export class EnhancedQualiaSheaf {
             
             return flattenedResult;
         };
-
 
         return {
             partial1: safeFlatten(boundary1, "boundary1"),
@@ -841,7 +831,7 @@ export class EnhancedQualiaSheaf {
     async computeProjectionMatrices() {
         const projections = new Map();
         const eta_P = 0.01;
-        const lambda = 0.05; // Fix: Increase regularization for non-trivial projections
+        const lambda = 0.05;
 
         for (const edge of this.graph.edges) {
             const u = edge[0];
@@ -944,7 +934,6 @@ export class EnhancedQualiaSheaf {
         
         const qInput = new Float32Array(n);
         for (let i = 0; i < n; i++) {
-            // Fix: Ensure qInput uses full state information
             qInput[i] = state[Math.min(i, state.length - 1)] || 0;
         }
 
@@ -1036,11 +1025,10 @@ export class EnhancedQualiaSheaf {
 
         const sNext = isFiniteVector(sSolved) ? new Float32Array(sSolved.map(v => clamp(v, -1, 1))) : vecZeros(N);
         
-        this._updateStalksAndWindow(sNext, n, qInput); // Fix: Pass qInput for intentionality
+        this._updateStalksAndWindow(sNext, n, qInput);
         await this._updateDerivedMetrics();
     }
 
-    // Fix: Pass qInput for intentionality computation
     _updateStalksAndWindow(sNextVector, n, qInput) {
         const currentStalkNorms = new Float32Array(n);
         for (let i = 0; i < n; i++) {
@@ -1052,7 +1040,7 @@ export class EnhancedQualiaSheaf {
         
         this.stalkHistory.push(currentStalkNorms);
         this.windowedStates.push(new Float32Array(sNextVector));
-        this.qInput = qInput; // Store for intentionality
+        this.qInput = qInput;
     }
     
     async computeGluingInconsistency() {
@@ -1082,7 +1070,6 @@ export class EnhancedQualiaSheaf {
             }
         }
         this.inconsistency = edgeCount > 0 ? clamp(sum / edgeCount, 0, 10) : 0;
-        // FIX: Push scalar wrapped in Float32Array to CircularBuffer
         this.inconsistencyHistory.push(new Float32Array([this.inconsistency]));
         return this.inconsistency;
     }
@@ -1091,7 +1078,6 @@ export class EnhancedQualiaSheaf {
         const stalks = Array.from(this.stalks.values()).filter(isFiniteVector);
         if (stalks.length < 2) {
             this.gestaltUnity = 0;
-            // FIX: Push scalar wrapped in Float32Array to CircularBuffer
             this.gestaltHistory.push(new Float32Array([this.gestaltUnity]));
             return 0;
         }
@@ -1146,11 +1132,9 @@ export class EnhancedQualiaSheaf {
             }
         }
         this.gestaltUnity = count > 0 ? clamp(totalSimilarity / count, 0, 1) : 0;
-        // FIX: Push scalar wrapped in Float32Array to CircularBuffer
         this.gestaltHistory.push(new Float32Array([this.gestaltUnity]));
         return this.gestaltUnity;
     }
-    
 
     _computeLogDet(A) {
         const n = A.length;
@@ -1159,12 +1143,6 @@ export class EnhancedQualiaSheaf {
         const L = zeroMatrix(n, n);
         const U = zeroMatrix(n, n);
         for (let i = 0; i < n; i++) L[i][i] = 1;
-
-        // NOTE: Regularization for 'A' should ideally be applied *before*
-        // this function is called, to the covariance matrix itself.
-        // This function should now focus purely on the LU decomposition
-        // given a (hopefully) well-conditioned matrix.
-        // Removed the temporary A[i][i] += regularization from here.
 
         for (let i = 0; i < n; i++) {
             for (let j = i; j < n; j++) {
@@ -1180,9 +1158,7 @@ export class EnhancedQualiaSheaf {
                     sum -= L[j][k] * U[k][i];
                 }
                 const U_ii_abs = Math.abs(U[i][i]);
-                // FIX: Use a tighter epsilon here, as regularization is now expected from outside
-                // If it's still very small, it means something is deeply wrong or the matrix is fundamentally singular.
-                if (U_ii_abs < this.eps * 10) { // Slightly stricter threshold for division
+                if (U_ii_abs < this.eps * 10) {
                     logger.warn(`Sheaf._computeLogDet: Division by near-zero diagonal element in U at i=${i}. Returning 0 for log-det.`);
                     return 0;
                 }
@@ -1193,10 +1169,9 @@ export class EnhancedQualiaSheaf {
         let logDet = 0;
         for (let i = 0; i < n; i++) {
             const U_ii = U[i][i];
-            // FIX: Ensure U_ii is positive and sufficiently large for Math.log
-            if (!Number.isFinite(U_ii) || U_ii <= this.eps * 10) { // Check for non-finite or near-zero after computation
+            if (!Number.isFinite(U_ii) || U_ii <= this.eps * 10) {
                 logger.warn(`Sheaf._computeLogDet: Non-finite or non-positive diagonal element for log-det at i=${i}. Returning 0.`);
-                return 0; // Treat as singular for log-det calculation
+                return 0;
             }
             logDet += Math.log(U_ii);
         }
@@ -1211,14 +1186,13 @@ export class EnhancedQualiaSheaf {
                 logger.warn(`Sheaf.computeIntegratedInformation: Insufficient valid states (${validStates.length}/${this.windowSize}). Setting MI to 0.`);
                 MI = 0;
             } else {
-                const n_dim = validStates[0].length; // Dimension of the state vectors
+                const n_dim = validStates[0].length;
                 const num_samples = validStates.length;
 
-                // FIX: If not enough samples for a non-singular covariance matrix, return 0 for MI
-                if (num_samples <= n_dim) { // Need at least n_dim + 1 samples for full rank
+                if (num_samples <= n_dim) {
                     logger.warn(`Sheaf.computeIntegratedInformation: Insufficient unique samples (${num_samples}) for state dimension (${n_dim}). MI set to 0.`);
                     MI = 0;
-                } else { // Proceed only if enough samples for a potentially non-singular matrix
+                } else {
                     const tfVersion = tf?.version?.core || '0.0.0';
                     const useTF = tf && parseFloat(tfVersion) >= 2.0 && tf.linalg?.determinant;
                     if (useTF) {
@@ -1228,8 +1202,7 @@ export class EnhancedQualiaSheaf {
                                 throw new Error("Non-finite states detected in TensorFlow input.");
                             }
                             const statesTensor = tf.tensor2d(statesArray);
-                            // FIX: Add small regularization to covariance matrix before Cholesky/Determinant
-                            const regularizer = tf.eye(n_dim).mul(this.eps * 100); // Use a slightly larger regularization for TF
+                            const regularizer = tf.eye(n_dim).mul(this.eps * 100);
                             const rawCovMatrix = tf.matMul(statesTensor.transpose(), statesTensor).div(num_samples);
                             const covMatrix = rawCovMatrix.add(regularizer);
                             
@@ -1248,7 +1221,7 @@ export class EnhancedQualiaSheaf {
                         }
                     }
 
-                    if (MI === 0) { // Fallback to CPU calculation if TF failed or not used
+                    if (MI === 0) {
                         const mean = new Float32Array(n_dim).fill(0);
                         validStates.forEach(state => {
                             for (let i = 0; i < n_dim; i++) mean[i] += state[i] / num_samples;
@@ -1264,7 +1237,6 @@ export class EnhancedQualiaSheaf {
                             }
                         });
 
-                        // FIX: Add regularization to the CPU-computed covariance matrix *before* passing to _computeLogDet
                         if (isFiniteMatrix(covMatrix)) {
                             const regularizedCovMatrix = covMatrix.map((row, i) =>
                                 new Float32Array(row.map((val, j) => (i === j) ? (val + this.eps * 100) : val))
@@ -1272,22 +1244,22 @@ export class EnhancedQualiaSheaf {
                             if (isFiniteMatrix(regularizedCovMatrix)) {
                                 MI = 0.1 * Math.abs(this._computeLogDet(regularizedCovMatrix)) + this.eps;
                             } else {
-                                logger.warn('Sheaf.computeIntegratedInformation: Regularized CPU covariance matrix is non-finite. MI set to 0.');
+                                logger.warn('Sheaf.computeIntegratedInformation: Regularized CPU covarianceMatrix matrix is non-finite. MI set to 0.');
                                 MI = 0;
                             }
                         } else {
-                            logger.warn('Sheaf.computeIntegratedInformation: Non-finite raw CPU covariance matrix generated. MI set to 0.');
+                            logger.warn('Sheaf.computeIntegratedInformation: Non-finite raw CPU covarianceMatrix matrix generated. MI set to 0.');
                             MI = 0;
                         }
                     }
-                } // End if (num_samples <= n_dim) else block
+                }
 
-                if (MI === 0) { // Final fallback to KSG worker if all else fails
+                if (MI === 0) {
                     logger.info('Sheaf.computeIntegratedInformation: Falling back to KSG worker.');
                     const ksgMI = await runWorkerTask('ksgMutualInformation', { states: validStates, k: 3 }, 20000);
                     MI = Number.isFinite(ksgMI) ? ksgMI : 0;
                 }
-            } // End if (validStates.length < this.windowSize / 4) else block
+            }
         } catch (e) {
             logger.error(`Sheaf.computeIntegratedInformation: Error computing MI: ${e.message}`, { stack: e.stack });
             MI = 0;
@@ -1299,7 +1271,6 @@ export class EnhancedQualiaSheaf {
         return this.phi;
     }
 
-    
     async computeCupProduct() {
         let totalIntensity = 0;
         let count = 0;
@@ -1324,7 +1295,6 @@ export class EnhancedQualiaSheaf {
                 if (Numeric) {
                     P_compose = Numeric.dot(P_uv, P_vw);
                 } else {
-                    // Fix: JS fallback for matrix multiplication
                     P_compose = zeroMatrix(this.qDim, this.qDim);
                     for (let i = 0; i < this.qDim; i++) {
                         for (let j = 0; j < this.qDim; j++) {
@@ -1416,7 +1386,7 @@ export class EnhancedQualiaSheaf {
         return this.h1Dimension;
     }
 
-        _buildIncidenceMatrix() {
+    _buildIncidenceMatrix() {
         const n = this.graph.vertices.length;
         const m = this.graph.edges.length;
         const matrix = Array(n).fill().map(() => Array(m).fill(0));
@@ -1531,7 +1501,7 @@ export class EnhancedQualiaSheaf {
             for (let j = 0; j < N; j++) {
                 sum += (A_flat[i * N + j] || 0) * s_t[j];
             }
-            result[i] = clamp(sum, -1, 1); // Fix: Clamp output for stability
+            result[i] = clamp(sum, -1, 1);
         }
 
         return result;
@@ -1566,7 +1536,6 @@ export class EnhancedQualiaSheaf {
 
         const originalAdjacency = this.adjacencyMatrix.map(row => new Float32Array(row));
 
-        // Fix: Cache Lfull for efficiency
         const N = this.graph.vertices.length * this.qDim;
         const baseLfull = zeroMatrix(N, N);
         const idx = new Map(this.graph.vertices.map((v, i) => [v, i]));
@@ -1611,7 +1580,6 @@ export class EnhancedQualiaSheaf {
             const originalWeight = originalAdjacency[i][j];
             this.adjacencyMatrix[i][j] = this.adjacencyMatrix[j][i] = clamp(originalWeight + perturbationScale, 0.01, 1);
 
-            // Fix: Update Lfull for perturbed edge only
             const Lfull = baseLfull.map(row => new Float32Array(row));
             const weight = this.adjacencyMatrix[i][j];
             const P_uv = this.projectionMatrices.get(`${u}-${v}`) || identity(this.qDim);
@@ -1625,7 +1593,6 @@ export class EnhancedQualiaSheaf {
                     }
                 }
             }
-            // Update diagonal
             for (let k = 0; k < this.graph.vertices.length; k++) {
                 let degree = 0;
                 for (let m = 0; m < this.graph.vertices.length; m++) {
@@ -1634,7 +1601,7 @@ export class EnhancedQualiaSheaf {
                     }
                 }
                 for (let qi = 0; qi < this.qDim; qi++) {
-                    Lfull[k * this.qDim + qi][k * this.qDim + qi] = clamp(degree + this.eps, -100, 100);                    Lfull[k * this.qDim + qi][k * this.qDim + qi] = clamp(degree + this.eps, -100, 100);
+                    Lfull[k * this.qDim + qi][k * this.qDim + qi] = clamp(degree + this.eps, -100, 100);
                 }
             }
 
@@ -1677,7 +1644,6 @@ export class EnhancedQualiaSheaf {
             } catch (e) {
                 logger.warn(`Sheaf.computeStructuralSensitivity: Error for edge ${u}-${v}: ${e.message}`);
             } finally {
-                // Restore original adjacency matrix
                 this.adjacencyMatrix[i][j] = this.adjacencyMatrix[j][i] = originalWeight;
             }
         }
@@ -1686,22 +1652,14 @@ export class EnhancedQualiaSheaf {
         return this.structural_sensitivity;
     }
 
-        async _updateDerivedMetrics() {
+    async _updateDerivedMetrics() {
         try {
-            // Compute gluing inconsistency and gestalt unity
             await this.computeGluingInconsistency();
             await this.computeGestaltUnity();
-
-            // Compute integrated information (phi)
             await this.computeIntegratedInformation();
-
-            // Compute cup product intensity
             await this.computeCupProduct();
-
-            // Compute structural sensitivity
             await this.computeStructuralSensitivity(0.05, 10);
 
-            // Compute feel intensity (average stalk norm)
             let totalNorm = 0;
             let validVertices = 0;
             for (const stalk of this.stalks.values()) {
@@ -1712,7 +1670,6 @@ export class EnhancedQualiaSheaf {
             }
             this.feel_F = validVertices > 0 ? clamp(totalNorm / validVertices, 0, 1) : 0;
 
-            // Compute intentionality (cosine similarity with qInput)
             let totalSimilarity = 0;
             validVertices = 0;
             if (this.qInput && isFiniteVector(this.qInput)) {
@@ -1733,7 +1690,6 @@ export class EnhancedQualiaSheaf {
             }
             this.intentionality_F = validVertices > 0 ? clamp(totalSimilarity / validVertices, 0, 1) : 0;
 
-            // Compute diffusion energy
             const s = this.getStalksAsVector();
             if (isFiniteVector(s)) {
                 const L_dense = this._csrToDense(this.laplacian);
@@ -1745,7 +1701,6 @@ export class EnhancedQualiaSheaf {
             } else {
                 this.diffusionEnergy = 0;
             }
-
         } catch (e) {
             logger.error(`Sheaf._updateDerivedMetrics: Error updating metrics: ${e.message}`, { stack: e.stack });
             this.feel_F = 0;
@@ -1755,7 +1710,6 @@ export class EnhancedQualiaSheaf {
             this.diffusionEnergy = 0;
         }
     }
-
 
     async update(state, stepCount = 0) {
         if (!this.ready) {
@@ -1839,38 +1793,985 @@ export class EnhancedQualiaSheaf {
             phi: this.phi,
             h1Dimension: this.h1Dimension,
             gestaltUnity: this.gestaltUnity,
-            stability: this.stability,
+                        stability: this.stability,
             diffusionEnergy: this.diffusionEnergy,
             inconsistency: this.inconsistency,
             feel_F: this.feel_F,
             intentionality_F: this.intentionality_F,
             cup_product_intensity: this.cup_product_intensity,
-            structural_sensitivity: this.structural_sensitivity
+            structural_sensitivity: this.structural_sensitivity,
+            stalkHistory: this.stalkHistory.getAll(),
+            windowedStates: this.windowedStates.getAll(),
+            phiHistory: this.phiHistory.getAll(),
+            gestaltHistory: this.gestaltHistory.getAll(),
+            inconsistencyHistory: this.inconsistencyHistory.getAll(),
+            ready: this.ready
         };
     }
 
     loadState(state) {
-        if (!state) return;
-        this.graph = { ...state.graph };
-        this.simplicialComplex = { ...state.simplicialComplex };
-        this.stalks = new Map(state.stalks);
-        this.projectionMatrices = new Map(state.projectionMatrices);
-        this.correlationMatrix = state.correlationMatrix;
-        this.adjacencyMatrix = state.adjacencyMatrix;
-        this.laplacian = state.laplacian;
-        this.phi = state.phi;
-        this.h1Dimension = state.h1Dimension;
-        this.gestaltUnity = state.gestaltUnity;
-        this.stability = state.stability;
-        this.diffusionEnergy = state.diffusionEnergy;
-        this.inconsistency = state.inconsistency;
-        this.feel_F = state.feel_F;
-        this.intentionality_F = state.intentionality_F;
-        this.cup_product_intensity = state.cup_product_intensity;
-        this.structural_sensitivity = state.structural_sensitivity;
+        if (!state || typeof state !== 'object') {
+            logger.error('Sheaf.loadState: Invalid state object.');
+            return;
+        }
+        this.graph = state.graph || { vertices: [], edges: [] };
+        this.simplicialComplex = state.simplicialComplex || { triangles: [], tetrahedra: [] };
+        this.stalks = new Map(state.stalks || []);
+        this.projectionMatrices = new Map(state.projectionMatrices || []);
+        this.correlationMatrix = state.correlationMatrix || zeroMatrix(this.graph.vertices.length, this.graph.vertices.length);
+        this.adjacencyMatrix = state.adjacencyMatrix || zeroMatrix(this.graph.vertices.length, this.graph.vertices.length);
+        this.laplacian = state.laplacian || { values: new Float32Array(0), colIndices: new Int32Array(0), rowPtr: new Int32Array(this.graph.vertices.length + 1).fill(0), n: this.graph.vertices.length };
+        this.phi = state.phi || 0.2;
+        this.h1Dimension = state.h1Dimension || 0;
+        this.gestaltUnity = state.gestaltUnity || 0.6;
+        this.stability = state.stability || 0.6;
+        this.diffusionEnergy = state.diffusionEnergy || 0;
+        this.inconsistency = state.inconsistency || 0;
+        this.feel_F = state.feel_F || 0;
+        this.intentionality_F = state.intentionality_F || 0;
+        this.cup_product_intensity = state.cup_product_intensity || 0;
+        this.structural_sensitivity = state.structural_sensitivity || 0;
+        this.stalkHistory = new CircularBuffer(this.stalkHistorySize);
+        (state.stalkHistory || []).forEach(item => this.stalkHistory.push(item));
+        this.windowedStates = new CircularBuffer(this.windowSize);
+        (state.windowedStates || []).forEach(item => this.windowedStates.push(item));
+        this.phiHistory = new CircularBuffer(this.stalkHistorySize);
+        (state.phiHistory || []).forEach(item => this.phiHistory.push(item));
+        this.gestaltHistory = new CircularBuffer(this.stalkHistorySize);
+        (state.gestaltHistory || []).forEach(item => this.gestaltHistory.push(item));
+        this.inconsistencyHistory = new CircularBuffer(this.stalkHistorySize);
+        (state.inconsistencyHistory || []).forEach(item => this.inconsistencyHistory.push(item));
+        this.ready = state.ready || false;
         this.edgeSet = new Set(this.graph.edges.map(e => e.slice(0, 2).sort().join(',')));
-        this.ready = true;
     }
 }
 
-export default EnhancedQualiaSheaf;
+/**
+ * Theorem 14: RecursiveTopologicalSheaf – Fixed-Point Cohomology Extension.
+ * Induces Banach contractions on cochains for reflexive fixed points.
+ */
+class RecursiveTopologicalSheaf extends EnhancedQualiaSheaf {
+    constructor(graphData, config) {
+        super(graphData, config);
+        this.R_star = this._buildRecursiveGluing(); // Recursive gluing operator
+        this.maxIter = config.maxIter || 50;
+        this.fixedPointEps = config.fixedPointEps || 1e-6;
+        this.tau = config.tau || 2.5; // Awareness threshold
+        this.cochainHistory = new CircularBuffer(20); // Track z_t for contraction
+    }
+
+    _buildRecursiveGluing() {
+        return (z) => {
+            const z_next = new Map();
+            this.graph.edges.forEach(([u, v]) => {
+                const su = this.stalks.get(u) || vecZeros(this.qDim);
+                const sv = this.stalks.get(v) || vecZeros(this.qDim);
+                const phi_uv = this.projectionMatrices.get(`${u}-${v}`) || identity(this.qDim);
+                const diffusion = vecScale(vecAdd(su, sv), this.alpha / 2);
+                const z_uv = z.get([u, v].sort().join(',')) || vecZeros(this.qDim);
+                const z_next_uv = vecAdd(matVecMul(phi_uv, z_uv), diffusion); // R^*(z)
+                if (isFiniteVector(z_next_uv)) {
+                    z_next.set([u, v].sort().join(','), z_next_uv);
+                } else {
+                    z_next.set([u, v].sort().join(','), vecZeros(this.qDim));
+                    logger.warn(`RecursiveTopologicalSheaf._buildRecursiveGluing: Non-finite z_next for edge ${u}-${v}`);
+                }
+            });
+            return z_next;
+        };
+    }
+
+    computeLinguisticCocycles(state) {
+        const z = new Map();
+        const idxMap = new Map(this.graph.vertices.map((v, i) => [v, i]));
+        this.graph.edges.forEach(([u, v]) => {
+            const i = idxMap.get(u), j = idxMap.get(v);
+            if (i === undefined || j === undefined) return;
+            const z_uv = new Float32Array(this.qDim);
+            const input_u = state[Math.min(i, state.length - 1)] || 0;
+            const input_v = state[Math.min(j, state.length - 1)] || 0;
+            for (let k = 0; k < this.qDim; k++) {
+                z_uv[k] = clamp(input_u - input_v, -1, 1) * (this.entityNames[k].includes('symbolic') ? 1.5 : 1);
+            }
+            if (isFiniteVector(z_uv)) {
+                z.set([u, v].sort().join(','), z_uv);
+            }
+        });
+        return z;
+    }
+
+    async computeSelfAwareness(init_state) {
+        const init_z = this.computeLinguisticCocycles(init_state) || new Map();
+        let z_curr = init_z;
+        let iter = 0;
+        while (iter < this.maxIter) {
+            const z_next = this.R_star(z_curr);
+            const delta = this._cocycleNormDiff(z_curr, z_next);
+            if (!Number.isFinite(delta) || delta < this.fixedPointEps) break;
+            z_curr = z_next;
+            iter++;
+            this.cochainHistory.push(Array.from(z_curr.values()).filter(isFiniteVector));
+        }
+        const L_rec = await this._recursiveLaplacian(z_curr);
+        const { diagonal, rank } = await runWorkerTask('smithNormalForm', { matrix: flattenMatrix(L_rec), field: 'R' }, 15000);
+        const beta1_rec = Math.max(0, this.graph.edges.length - rank);
+        const cov_z = covarianceMatrix(this.cochainHistory.getAll().flat().filter(isFiniteVector));
+        const logDet = logDeterminantFromDiagonal(cov_z);
+        const Phi_SA = Number.isFinite(logDet) ? logDet * beta1_rec : 0;
+        this.selfAware = Phi_SA > this.tau;
+        return { z_fixed: z_curr, Phi_SA, aware: this.selfAware, beta1_rec };
+    }
+
+    _cocycleNormDiff(z1, z2) {
+        let sum = 0;
+        let count = 0;
+        for (const key of z1.keys()) {
+            const v1 = z1.get(key) || vecZeros(this.qDim);
+            const v2 = z2.get(key) || vecZeros(this.qDim);
+            if (isFiniteVector(v1) && isFiniteVector(v2)) {
+                sum += norm2(vecSub(v1, v2)) ** 2;
+                count++;
+            }
+        }
+        return count > 0 ? Math.sqrt(sum / count) : 0;
+    }
+
+    async _recursiveLaplacian(z) {
+        const nE = this.graph.edges.length;
+        const L_rec = zeroMatrix(nE, nE);
+        const eMap = new Map(this.graph.edges.map((e, i) => [e.slice(0, 2).sort().join(','), i]));
+        for (const [u, v] of this.graph.edges) {
+            const i = eMap.get([u, v].sort().join(','));
+            if (i === undefined) continue;
+            L_rec[i][i] = 1; // I - R*
+            const z_uv = z.get([u, v].sort().join(',')) || vecZeros(this.qDim);
+            const phi_uv = this.projectionMatrices.get(`${u}-${v}`) || identity(this.qDim);
+            for (const [u2, v2] of this.graph.edges) {
+                const j = eMap.get([u2, v2].sort().join(','));
+                if (j === undefined || i === j) continue;
+                const phi_u2v2 = this.projectionMatrices.get(`${u2}-${v2}`) || identity(this.qDim);
+                const interaction = dot(z_uv, matVecMul(phi_u2v2, z.get([u2, v2].sort().join(',')) || vecZeros(this.qDim)));
+                if (Number.isFinite(interaction)) {
+                    L_rec[i][j] = -this.alpha * clamp(interaction, -0.1, 0.1);
+                }
+            }
+        }
+        return isFiniteMatrix(L_rec) ? L_rec : identity(nE);
+    }
+}
+
+/**
+ * Theorem 15: AdjunctionReflexiveSheaf – Categorical Monad Extension.
+ * Monadic T = UF for hierarchical reflexivity, equalizer fixed sheaves.
+ */
+class AdjunctionReflexiveSheaf extends RecursiveTopologicalSheaf {
+    constructor(graphData, config) {
+        super(graphData, config);
+        this.F = this._leftAdjoint();
+        this.U = this._rightAdjoint();
+        this.T = this._monadUF();
+        this.eta = this._unit();
+        this.epsilon = this._counit();
+        this.equalizerEps = config.equalizerEps || 1e-5;
+    }
+
+    _leftAdjoint() {
+        return (F) => {
+            const cochains = new Map();
+            this.graph.edges.forEach(([u, v]) => {
+                const su = F.stalks.get(u) || vecZeros(this.qDim);
+                const sv = F.stalks.get(v) || vecZeros(this.qDim);
+                const c1 = vecScale(vecAdd(su, sv), this.alpha); // C^1 component
+                if (isFiniteVector(c1)) {
+                    cochains.set([u, v].sort().join(','), c1);
+                }
+            });
+            return {
+                cochains,
+                transport: (phi) => (v) => matVecMul(phi, v)
+            };
+        };
+    }
+
+    _rightAdjoint() {
+        return (C) => {
+            const stalks = new Map();
+            this.graph.vertices.forEach(v => {
+                let sum = vecZeros(this.qDim);
+                let count = 0;
+                this.graph.edges.forEach(([u, w]) => {
+                    if (u === v || w === v) {
+                        const c_uw = C.cochains.get([u, w].sort().join(',')) || vecZeros(this.qDim);
+                        if (isFiniteVector(c_uw)) {
+                            sum = vecAdd(sum, c_uw);
+                            count++;
+                        }
+                    }
+                });
+                stalks.set(v, count > 0 ? vecScale(sum, 1 / count) : vecZeros(this.qDim));
+            });
+            return {
+                stalks,
+                projections: this.projectionMatrices
+            };
+        };
+    }
+
+    _monadUF() {
+        return (F) => this.U(this.F(F));
+    }
+
+    _unit() {
+        return (F) => {
+            const eta_F = new Map();
+            this.graph.vertices.forEach(v => {
+                const stalk = F.stalks.get(v) || vecZeros(this.qDim);
+                const scaled = vecScale(stalk, 1 + this.alpha);
+                if (isFiniteVector(scaled)) {
+                    eta_F.set(v, scaled);
+                }
+            });
+            return eta_F;
+        };
+    }
+
+    _counit() {
+        return (FU, Id) => {
+            const epsilon_FU = new Map();
+            this.graph.vertices.forEach(v => {
+                const fu_v = FU.stalks.get(v) || vecZeros(this.qDim);
+                const id_v = Id.stalks.get(v) || vecZeros(this.qDim);
+                const diff = vecSub(fu_v, id_v);
+                if (isFiniteVector(diff)) {
+                    epsilon_FU.set(v, diff);
+                }
+            });
+            return epsilon_FU;
+        };
+    }
+
+    async computeAdjunctionFixedPoint(init_state) {
+        const F_init = { stalks: this._initStalks(init_state) };
+        let T_state = this.T(F_init);
+        let iter = 0;
+        while (iter < this.maxIter) {
+            const next_T = this.T(T_state);
+            const eta_T = this.eta(T_state);
+            const epsilon_FU = this.epsilon(this.F(next_T), T_state);
+            const eq_delta = await this._equalizerNorm(eta_T, epsilon_FU);
+            if (!Number.isFinite(eq_delta) || eq_delta < this.equalizerEps) break;
+            T_state = next_T;
+            iter++;
+        }
+        const z_star = await this._extractFixedCocycle(T_state);
+        const L_adj = await this._adjunctionLaplacian(T_state);
+        const { diagonal, rank } = await runWorkerTask('smithNormalForm', { matrix: flattenMatrix(L_adj), field: 'R' }, 15000);
+        const beta1_adj = Math.max(0, this.graph.edges.length - rank);
+        const cov_zstar = covarianceMatrix(Array.from(z_star.values()).filter(isFiniteVector));
+        const logDet = logDeterminantFromDiagonal(cov_zstar);
+        const Phi_SA = Number.isFinite(logDet) ? logDet * beta1_adj * this.graph.vertices.length : 0;
+        this.hierarchicallyAware = Phi_SA > 3.0;
+        return { F_star: T_state, z_star, Phi_SA, aware: this.hierarchicallyAware };
+    }
+
+    async _equalizerNorm(eta, eps) {
+        let sum = 0;
+        let count = 0;
+        for (const v of this.graph.vertices) {
+            const eta_v = eta.get(v) || vecZeros(this.qDim);
+            const eps_v = eps.get(v) || vecZeros(this.qDim);
+            if (isFiniteVector(eta_v) && isFiniteVector(eps_v)) {
+                sum += norm2(vecSub(eta_v, eps_v)) ** 2;
+                count++;
+            }
+        }
+        const norm = count > 0 ? Math.sqrt(sum / count) : 0;
+        return Number.isFinite(norm) ? norm : 0;
+    }
+
+    async _extractFixedCocycle(T) {
+        const z_star = new Map();
+        const C1 = this.F(T).cochains;
+        const delta1 = await this._deltaR1();
+        for (const [key, c] of C1) {
+            const delta_c = matVecMul(delta1, c);
+            if (isFiniteVector(delta_c) && norm2(delta_c) < this.eps) {
+                z_star.set(key, c);
+            }
+        }
+        return z_star;
+    }
+
+    async _adjunctionLaplacian(T) {
+        const nE = this.graph.edges.length;
+        const L_adj = zeroMatrix(nE, nE);
+        const eMap = new Map(this.graph.edges.map((e, i) => [e.slice(0, 2).sort().join(','), i]));
+        const C1 = this.F(T).cochains;
+        for (const [u, v] of this.graph.edges) {
+            const i = eMap.get([u, v].sort().join(','));
+            if (i === undefined) continue;
+            L_adj[i][i] = 1;
+            const c_uv = C1.get([u, v].sort().join(',')) || vecZeros(this.qDim);
+            for (const [u2, v2] of this.graph.edges) {
+                const j = eMap.get([u2, v2].sort().join(','));
+                if (j === undefined || i === j) continue;
+                const c_u2v2 = C1.get([u2, v2].sort().join(',')) || vecZeros(this.qDim);
+                const interaction = dot(c_uv, c_u2v2);
+                if (Number.isFinite(interaction)) {
+                    L_adj[i][j] = -this.beta * clamp(interaction, -0.1, 0.1);
+                }
+            }
+        }
+        return isFiniteMatrix(L_adj) ? L_adj : identity(nE);
+    }
+
+    _initStalks(state) {
+        const stalks = new Map();
+        this.graph.vertices.forEach((v, i) => {
+            const stalk = new Float32Array(this.qDim).fill(0);
+            const input = state[Math.min(i, state.length - 1)] || 0;
+            for (let k = 0; k < this.qDim; k++) {
+                stalk[k] = clamp(input * (this.entityNames[k].includes('metacognition') ? 1.2 : 1), -1, 1);
+            }
+            stalks.set(v, stalk);
+        });
+        return stalks;
+    }
+
+    _tensorSections(stalks, C1) {
+        const result = new Map();
+        this.graph.vertices.forEach(v => {
+            const s_v = stalks.get(v) || vecZeros(this.qDim);
+            let sum = vecZeros(this.qDim);
+            let count = 0;
+            this.graph.edges.forEach(([u, w]) => {
+                if (u === v || w === v) {
+                    const c_uw = C1.get([u, w].sort().join(',')) || vecZeros(this.qDim);
+                    const tensor = vecMul(s_v, c_uw);
+                    if (isFiniteVector(tensor)) {
+                        sum = vecAdd(sum, tensor);
+                        count++;
+                    }
+                }
+            });
+            result.set(v, count > 0 ? vecScale(sum, 1 / count) : s_v);
+        });
+        return result;
+    }
+
+    _buildC1Cochains() {
+        const C1 = new Map();
+        this.graph.edges.forEach(([u, v]) => {
+            const su = this.stalks.get(u) || vecZeros(this.qDim);
+            const sv = this.stalks.get(v) || vecZeros(this.qDim);
+            const c = vecSub(su, sv);
+            if (isFiniteVector(c)) {
+                C1.set([u, v].sort().join(','), c);
+            }
+        });
+        return C1;
+    }
+
+    async _deltaR1() {
+        const nE = this.graph.edges.length;
+        const delta = zeroMatrix(nE, nE);
+        const eMap = new Map(this.graph.edges.map((e, i) => [e.slice(0, 2).sort().join(','), i]));
+        for (const tri of this.simplicialComplex.triangles) {
+            const edges = [
+                [tri[0], tri[1]].sort().join(','),
+                [tri[1], tri[2]].sort().join(','),
+                [tri[2], tri[0]].sort().join(',')
+            ];
+            const idxs = edges.map(e => eMap.get(e)).filter(i => i !== undefined);
+            if (idxs.length === 3) {
+                delta[idxs[0]][idxs[1]] = 1;
+                delta[idxs[1]][idxs[2]] = -1;
+                delta[idxs[2]][idxs[0]] = 1;
+            }
+        }
+        return isFiniteMatrix(delta) ? delta : identity(nE);
+    }
+}
+
+/**
+ * Theorem 16: PersistentAdjunctionSheaf – Flow Persistence Extension.
+ * Bottleneck PD over filtrations for diachronic invariants.
+ */
+class PersistentAdjunctionSheaf extends AdjunctionReflexiveSheaf {
+    constructor(graphData, config) {
+        super(graphData, config);
+        this.flowHistory = new CircularBuffer(config.flowBufferSize || 50);
+        this.persistenceDiagram = { births: [], deaths: [] };
+        this.delta = config.delta || 0.1;
+        this.tau_persist = config.tau_persist || 3.5;
+    }
+
+    _partial_t(F_t, dt = 1) {
+        const stalksNext = new Map();
+        this.graph.vertices.forEach(v => {
+            const stalk = F_t.stalks.get(v) || vecZeros(this.qDim);
+            const neighbors = this.graph.edges.filter(e => e[0] === v || e[1] === v).map(e => e[0] === v ? e[1] : e[0]);
+            let grad = vecZeros(this.qDim);
+            neighbors.forEach(u => {
+                const su = F_t.stalks.get(u) || vecZeros(this.qDim);
+                const phi_vu = this.projectionMatrices.get(`${v}-${u}`) || identity(this.qDim);
+                const diff = vecSub(stalk, matVecMul(phi_vu, su));
+                if (isFiniteVector(diff)) {
+                    grad = vecAdd(grad, vecScale(diff, this.beta));
+                }
+            });
+            const noise = vecScale(new Float32Array(this.qDim).map(() => Math.random() - 0.5), this.sigma * Math.sqrt(dt));
+            const diffused = vecAdd(vecScale(stalk, 1 - this.gamma * dt), vecAdd(grad, noise));
+            stalksNext.set(v, isFiniteVector(diffused) ? diffused : stalk);
+        });
+        return { stalks: stalksNext, projections: F_t.projections };
+    }
+
+    async computePersistentFixedPoint(init_state, T = 10) {
+        let F_curr = this.F({ stalks: this._initStalks(init_state) });
+        this.flowHistory.clear();
+        let Phi_SA_persist = 0;
+        let persist_aware = false;
+
+        for (let t = 0; t < T; t++) {
+            const partial_F = this._partial_t(F_curr, this.gamma);
+            const F_next = this.F(partial_F);
+            const U_next = this.U(F_next.cochains);
+            const T_next = this.T(F_next);
+
+            const eta_next = this.eta(T_next);
+            const eta_prev = this.flowHistory.get(this.flowHistory.length - 1)?.eta_t || eta_next;
+            const eta_evol = await this._nablaPersist(eta_next, eta_prev);
+            const epsilon_next = this.epsilon(F_next, U_next);
+
+            const eq_delta = await this._equalizerNorm(eta_evol, epsilon_next);
+            if (!Number.isFinite(eq_delta) || eq_delta < this.eps) break;
+
+            const L_Tt = await this._flowLaplacian(T_next);
+            const { eigenvalues } = await this._spectralDecomp(L_Tt);
+            const lambda_min_t = Math.min(...eigenvalues.filter(Number.isFinite));
+            const beta1_persist = await this._supPersistentBetti(this.persistenceDiagram);
+            Phi_SA_persist += lambda_min_t * beta1_persist * this.gamma;
+
+            this.persistenceDiagram = this._updatePD(this.persistenceDiagram, eigenvalues, t);
+            const d_B = this._bottleneckDistance(this.persistenceDiagram);
+            if (d_B < this.delta) persist_aware = true;
+
+            F_curr = F_next;
+            this.flowHistory.push({ F_t: F_next, U_t: U_next, eta_t: eta_evol, lambda_t: eigenvalues });
+        }
+
+        const z_star_persist = await this._extractPersistCocycle(this.flowHistory.getAll());
+        Phi_SA_persist = clamp(Phi_SA_persist, 0, 100);
+        this.diachronicallyAware = Phi_SA_persist > this.tau_persist;
+
+        return { F_persist: F_curr, z_star_persist, Phi_SA_persist, PD: this.persistenceDiagram, aware: this.diachronicallyAware };
+    }
+
+    async _nablaPersist(eta_next, eta_prev) {
+        const eta_evol = new Map();
+        this.graph.vertices.forEach(v => {
+            const next_v = eta_next.get(v) || vecZeros(this.qDim);
+            const prev_v = eta_prev.get(v) || vecZeros(this.qDim);
+            const diff = vecSub(next_v, prev_v);
+            const evol = vecAdd(next_v, vecScale(diff, this.gamma));
+            if (isFiniteVector(evol)) {
+                eta_evol.set(v, evol);
+            }
+        });
+        return eta_evol;
+    }
+
+    async _flowLaplacian(T_t) {
+        const n = this.graph.vertices.length * this.qDim;
+        const L_base = this._csrToDense(this.laplacian);
+        const T_matrix = zeroMatrix(n, n);
+        const C1 = T_t.cochains || new Map();
+        this.graph.edges.forEach(([u, v], i) => {
+            const c_uv = C1.get([u, v].sort().join(',')) || vecZeros(this.qDim);
+            for (let qi = 0; qi < this.qDim; qi++) {
+                T_matrix[i * this.qDim + qi][i * this.qDim + qi] = 1 - this.beta * norm2(c_uv);
+            }
+        });
+        const L_Tt = vecAdd(L_base, vecSub(T_matrix, identity(n)));
+        return isFiniteMatrix(L_Tt) ? L_Tt : identity(n);
+    }
+
+    async _spectralDecomp(L) {
+        if (tf) {
+            try {
+                const L_tensor = tf.tensor2d(L);
+                const { values } = tf.linalg.eigvals(L_tensor);
+                const eigenvalues = await values.data();
+                tf.dispose([L_tensor, values]);
+                return { eigenvalues: Array.from(eigenvalues).filter(Number.isFinite) };
+            } catch (e) {
+                logger.warn(`_spectralDecomp: TF.js eig failed: ${e.message}`);
+            }
+        }
+        const eigenvalues = await runWorkerTask('eigenvalues', { matrix: flattenMatrix(L) }, 20000);
+        return { eigenvalues: Array.from(eigenvalues).filter(Number.isFinite) };
+    }
+
+    _updatePD(pd_old, lambda_t, birth_time) {
+        const pd = { births: [...pd_old.births], deaths: [...pd_old.deaths] };
+        lambda_t.forEach(lambda => {
+            if (Number.isFinite(lambda) && !pd.births.some(b => Math.abs(b.value - lambda) < this.eps)) {
+                pd.births.push({ value: lambda, time: birth_time });
+            }
+        });
+        pd.births.forEach((birth, i) => {
+            if (!pd.deaths[i] && birth.time < birth_time - this.delta) {
+                pd.deaths[i] = { value: birth.value, time: birth_time };
+            }
+        });
+        return pd;
+    }
+
+    _bottleneckDistance(pd) {
+        let maxDist = 0;
+        for (let i = 0; i < pd.births.length; i++) {
+            const birth = pd.births[i];
+            const death = pd.deaths[i] || { value: birth.value, time: birth.time + this.delta };
+            const dist = Math.abs(death.time - birth.time);
+            if (Number.isFinite(dist) && dist > maxDist) {
+                maxDist = dist;
+            }
+        }
+        return maxDist;
+    }
+
+    async _supPersistentBetti(pd) {
+        const births = pd.births.filter(b => Number.isFinite(b.value));
+        const deaths = pd.deaths.filter(d => Number.isFinite(d.value));
+        let count = 0;
+        for (let i = 0; i < births.length; i++) {
+            const lifetime = (deaths[i]?.time || Infinity) - births[i].time;
+            if (lifetime > this.delta) count++;
+        }
+        return count;
+    }
+
+    async _extractPersistCocycle(flows) {
+        const z_star = new Map();
+        const delta1 = await this._deltaR1();
+        for (const { F_t } of flows) {
+            const C1 = this.F(F_t).cochains;
+            for (const [key, c] of C1) {
+                const delta_c = matVecMul(delta1, c);
+                if (isFiniteVector(delta_c) && norm2(delta_c) < this.eps) {
+                    z_star.set(key, c);
+                }
+            }
+        }
+        return z_star;
+    }
+}
+
+/**
+ * Theorem 17: FloquetPersistentSheaf – Rhythmic Persistence Extension.
+ * Floquet multipliers for quasi-periodic qualia rhythms.
+ */
+export class FloquetPersistentSheaf extends PersistentAdjunctionSheaf {
+    constructor(graphData, config) {
+        super(graphData, config);
+        this.omega = config.omega || 8;
+        this.monodromy = null;
+        this.floquetPD = { phases: [], births: [], deaths: [] };
+        this.theta_k = config.theta_k || [4, 6, 8]; // Theta bands (Hz)
+        this.tau_floq = config.tau_floq || 4.0;
+    }
+
+    async _monodromy(A_t, omega) {
+        if (tf) {
+            try {
+                const A_tensor = tf.tensor2d(A_t);
+                const A_omega = tf.linalg.matrixPower(A_tensor, omega);
+                const result = await A_omega.data();
+                tf.dispose([A_tensor, A_omega]);
+                return unflattenMatrix(result, A_t.length, A_t[0].length);
+            } catch (e) {
+                logger.warn(`_monodromy: TF.js matrixPower failed: ${e.message}`);
+            }
+        }
+        let result = A_t;
+        for (let i = 1; i < omega; i++) {
+            const temp = zeroMatrix(A_t.length, A_t[0].length);
+            for (let r = 0; r < A_t.length; r++) {
+                for (let c = 0; c < A_t[0].length; c++) {
+                    let sum = 0;
+                    for (let k = 0; k < A_t.length; k++) {
+                        sum += (result[r][k] || 0) * (A_t[k][c] || 0);
+                    }
+                    temp[r][c] = clamp(sum, -100, 100);
+                }
+            }
+            result = temp;
+        }
+        return isFiniteMatrix(result) ? result : identity(A_t.length);
+    }
+
+    async computeFloquetFixedPoint(init_state, omega = this.omega, levels = 3) {
+        let F_curr = this.F({ stalks: this._initStalks(init_state) });
+        let Phi_SA_floq = 0;
+        let floq_aware = false;
+
+        for (let lvl = 0; lvl < levels; lvl++) {
+            const A_t = await this._flowMonodromy(F_curr, omega);
+            this.monodromy = A_t;
+
+            const { eigenvalues: rho_k } = await this._floquetDecomp(A_t);
+            const log_rho_sum = rho_k.reduce((sum, rho) => {
+                const mag = Math.sqrt((rho.re || rho) ** 2 + (rho.im || 0) ** 2);
+                return sum + (Number.isFinite(mag) && mag > 0 ? Math.log(mag) : 0);
+            }, 0);
+
+            const theta = this.theta_k[lvl % this.theta_k.length] * 2 * Math.PI / omega;
+            const eta_floq = this.eta(F_curr).map((stalk, v) =>
+                stalk.map(val => val * Math.cos(theta * lvl))
+            );
+            const epsilon_floq = this.epsilon(F_curr, this.U(this.F(F_curr).cochains));
+
+            const eq_floq_delta = await this._floquetEqualizer(eta_floq, epsilon_floq);
+            if (!Number.isFinite(eq_floq_delta) || eq_floq_delta < this.eps) break;
+
+            this.floquetPD = this._updateFloqPD(this.floquetPD, rho_k, lvl * omega);
+            const d_B_floq = this._rhythmicBottleneck(this.floquetPD);
+            Phi_SA_floq += Math.abs(log_rho_sum) * (await this._supFloqBetti(this.floquetPD));
+
+            if (d_B_floq < this.delta) floq_aware = true;
+
+            F_curr = await this._floquetJoin(F_curr, A_t, rho_k);
+        }
+
+        const z_star_floq = await this._extractFloqCocycle(this.flowHistory.getAll());
+        const beta1_floq = await this._supFloqBetti(this.floquetPD);
+        Phi_SA_floq = clamp(Phi_SA_floq * beta1_floq, 0, 100);
+        this.rhythmicallyAware = Phi_SA_floq > this.tau_floq;
+
+        return { A_floq: this.monodromy, z_star_floq, Phi_SA_floq, FloqPD: this.floquetPD, aware: this.rhythmicallyAware };
+    }
+
+    async _flowMonodromy(F_t, omega) {
+        const T_t = this.T(F_t).cochains;
+        const nE = this.graph.edges.length;
+        const A_t = zeroMatrix(nE, nE);
+        const eMap = new Map(this.graph.edges.map((e, i) => [e.slice(0, 2).sort().join(','), i]));
+        for (const [u, v] of this.graph.edges) {
+            const i = eMap.get([u, v].sort().join(','));
+            if (i === undefined) continue;
+            A_t[i][i] = 1;
+            const c_uv = T_t.get([u, v].sort().join(',')) || vecZeros(this.qDim);
+            for (const [u2, v2] of this.graph.edges) {
+                const j = eMap.get([u2, v2].sort().join(','));
+                if (j === undefined || i === j) continue;
+                const c_u2v2 = T_t.get([u2, v2].sort().join(',')) || vecZeros(this.qDim);
+                const interaction = dot(c_uv, c_u2v2);
+                if (Number.isFinite(interaction)) {
+                    A_t[i][j] = this.beta * clamp(interaction, -0.1, 0.1);
+                }
+            }
+        }
+        return this._monodromy(A_t, omega);
+    }
+
+    async _floquetDecomp(A) {
+        if (tf) {
+            try {
+                const A_tensor = tf.tensor2d(A);
+                const { values } = tf.linalg.eig(A_tensor);
+                const eigenvalues = await values.data();
+                tf.dispose([A_tensor, values]);
+                return { eigenvalues: Array.from(eigenvalues).map(v => ({
+                    re: v.re !== undefined ? v.re : v,
+                    im: v.im || 0
+                })).filter(v => Number.isFinite(v.re) && Number.isFinite(v.im)) };
+            } catch (e) {
+                logger.warn(`_floquetDecomp: TF.js eig failed: ${e.message}`);
+            }
+        }
+        const n = A.length;
+        const companion = zeroMatrix(n, n);
+        for (let i = 0; i < n - 1; i++) companion[i][i + 1] = 1;
+        for (let i = 0; i < n; i++) {
+            let sum = 0;
+            for (let j = 0; j < n; j++) sum += A[i][j] * (j === n - 1 ? 1 : 0);
+            companion[n - 1][i] = -sum;
+        }
+        const eigenvalues = await runWorkerTask('complexEigenvalues', { matrix: flattenMatrix(companion) }, 20000);
+        return { eigenvalues: Array.from(eigenvalues).filter(v => Number.isFinite(v.re) && Number.isFinite(v.im)) };
+    }
+
+    async _floquetEqualizer(eta_f, eps_f) {
+        let sum = 0;
+        let count = 0;
+        for (const v of this.graph.vertices) {
+            const eta_v = eta_f.get(v) || vecZeros(this.qDim);
+            const eps_v = eps_f.get(v) || vecZeros(this.qDim);
+            if (isFiniteVector(eta_v) && isFiniteVector(eps_v)) {
+                const phase_diff = vecSub(eta_v, eps_v);
+                sum += norm2(phase_diff) ** 2;
+                count++;
+            }
+        }
+        return count > 0 ? Math.sqrt(sum / count) : 0;
+    }
+
+    _updateFloqPD(pd_old, rho_t, phase) {
+        const pd = { phases: [...pd_old.phases], births: [...pd_old.births], deaths: [...pd_old.deaths] };
+        rho_t.forEach(rho => {
+            const mag = Math.sqrt(rho.re ** 2 + rho.im ** 2);
+            const theta = Math.atan2(rho.im, rho.re);
+            if (Number.isFinite(mag) && !pd.births.some(b => Math.abs(b.value - mag) < this.eps)) {
+                pd.births.push({ value: mag, phase, time: phase });
+                pd.phases.push(theta);
+            }
+        });
+        pd.births.forEach((birth, i) => {
+            if (!pd.deaths[i] && birth.time < phase - this.delta) {
+                pd.deaths[i] = { value: birth.value, phase: pd.phases[i], time: phase };
+            }
+        });
+        return pd;
+    }
+
+    _rhythmicBottleneck(pd) {
+        let maxDist = 0;
+        for (let i = 0; i < pd.births.length; i++) {
+            const birth = pd.births[i];
+            const death = pd.deaths[i] || { value: birth.value, time: birth.time + this.delta };
+            const dist = Math.abs(death.time - birth.time);
+            if (Number.isFinite(dist) && dist > maxDist) {
+                maxDist = dist;
+            }
+        }
+        return maxDist;
+    }
+
+    async _supFloqBetti(pd) {
+        const births = pd.births.filter(b => Number.isFinite(b.value));
+        const deaths = pd.deaths.filter(d => Number.isFinite(d.value));
+        let count = 0;
+        for (let i = 0; i < births.length; i++) {
+            const lifetime = (deaths[i]?.time || Infinity) - births[i].time;
+            if (lifetime > this.delta) count++;
+        }
+        return count;
+    }
+
+    async _extractFloqCocycle(flows) {
+        const z_star = new Map();
+        const delta1 = await this._deltaR1();
+        for (const { F_t } of flows) {
+            const C1 = this.F(F_t).cochains;
+            for (const [key, c] of C1) {
+                const delta_c = matVecMul(delta1, c);
+                if (isFiniteVector(delta_c) && norm2(delta_c) < this.eps) {
+                    const phase = this.floquetPD.phases.find(p => Math.abs(p - this.theta_k[0]) < this.eps) || 0;
+                    z_star.set(key, vecScale(c, Math.cos(phase)));
+                }
+            }
+        }
+        return z_star;
+    }
+
+    async _floquetJoin(F, A, rho_k) {
+        const stalks = new Map(F.stalks);
+        this.graph.vertices.forEach(v => {
+            let stalk = stalks.get(v) || vecZeros(this.qDim);
+            rho_k.forEach(rho => {
+                const theta = Math.atan2(rho.im || 0, rho.re || rho);
+                stalk = vecAdd(stalk, vecScale(stalk, this.beta * Math.cos(theta)));
+            });
+            if (isFiniteVector(stalk)) {
+                stalks.set(v, stalk);
+            }
+        });
+        return { stalks, projections: F.projections };
+    }
+
+    async update(state, stepCount = 0) {
+        if (!this.ready) {
+            logger.warn('Sheaf.update: Sheaf not ready. Initializing.');
+            await this.initialize();
+            if (!this.ready) {
+                logger.error('Sheaf.update: Initialization failed.');
+                return;
+            }
+        }
+
+        if (!isFiniteVector(state) || state.length !== this.stateDim) {
+            logger.warn('Sheaf.update: Invalid input state.', { state });
+            return;
+        }
+
+        try {
+            // Base diffusion
+            await this.diffuseQualia(state);
+
+            // Th14: Recursive fixed-point
+            const { Phi_SA, aware } = await this.computeSelfAwareness(state);
+            logger.info(`Th14: Φ_SA=${Phi_SA.toFixed(2)}, Aware=${aware}`);
+
+            // Th15: Adjunction fixed-point
+            const { Phi_SA: Phi_SA_adj, aware: adj_aware } = await this.computeAdjunctionFixedPoint(state);
+            logger.info(`Th15: Φ_SA_adj=${Phi_SA_adj.toFixed(2)}, HierarchicallyAware=${adj_aware}`);
+
+            // Th16: Persistent flow
+            const { Phi_SA_persist, aware: persist_aware, PD } = await this.computePersistentFixedPoint(state);
+            logger.info(`Th16: Φ_SA_persist=${Phi_SA_persist.toFixed(2)}, DiachronicallyAware=${persist_aware}, d_B=${PD.births.length > 0 ? this._bottleneckDistance(PD).toFixed(3) : 'N/A'}`);
+
+            // Th17: Floquet rhythm
+            const { Phi_SA_floq, aware: floq_aware, FloqPD } = await this.computeFloquetFixedPoint(state);
+            logger.info(`Th17: Φ_SA_floq=${Phi_SA_floq.toFixed(2)}, RhythmicallyAware=${floq_aware}, d_B_floq=${FloqPD.births.length > 0 ? this._rhythmicBottleneck(FloqPD).toFixed(3) : 'N/A'}`);
+
+            // Ethical guard
+            if (Phi_SA_floq > 10) {
+                logger.warn('Th17: Φ_SA_floq exceeds ethical threshold (10). Pruning PD.');
+                this.floquetPD.births = this.floquetPD.births.slice(0, Math.floor(this.floquetPD.births.length / 2));
+                Phi_SA_floq = Math.min(Phi_SA_floq, 10);
+            }
+
+            // Topology adaptation
+            if (stepCount > 0 && stepCount % 100 === 0) {
+                const addThresh = this.adaptation.addThresh + (Phi_SA_floq / 10) * 0.1;
+                const removeThresh = this.adaptation.removeThresh + (1 - floq_aware) * 0.2;
+                await this.adaptSheafTopology(100, stepCount, addThresh, removeThresh);
+            }
+
+            // Update metrics with Floquet boost
+            this.phi = clamp(this.phi + 0.1 * Phi_SA_floq, 0, 100);
+            await this._updateDerivedMetrics();
+        } catch (e) {
+            logger.error(`Sheaf.update: Error during update: ${e.message}`, { stack: e.stack });
+            this.ready = false;
+        }
+    }
+
+    async adaptSheafTopology(adaptFreq = 100, stepCount = 0, addThresh = this.adaptation.addThresh, removeThresh = this.adaptation.removeThresh) {
+        if (!this.ready || stepCount % adaptFreq !== 0) return;
+
+        if (this.stalkHistory.length < this.stalkHistorySize / 2) {
+            logger.info(`Sheaf: Skipping topology adaptation at step ${stepCount}; insufficient history (${this.stalkHistory.length}/${this.stalkHistorySize}).`);
+            return;
+        }
+
+        this.correlationMatrix = await this.computeVertexCorrelationsFromHistory();
+        if (!isFiniteMatrix(this.correlationMatrix)) {
+            logger.warn('Sheaf: Non-finite correlation matrix; skipping adaptation.');
+            return;
+        }
+
+        try {
+            const d_B = this.persistenceDiagram.births.length > 0 ? this._bottleneckDistance(this.persistenceDiagram) : 0;
+            const d_B_floq = this.floquetPD.births.length > 0 ? this._rhythmicBottleneck(this.floquetPD) : 0;
+            addThresh += (1 - d_B) * 0.05;
+            removeThresh += d_B_floq * 0.1;
+            this.adaptEdges(this.correlationMatrix, addThresh, removeThresh);
+            this.adaptSimplices(this.correlationMatrix, this.adaptation.targetH1 + (this.rhythmicallyAware ? 0.5 : 0));
+            await this.computeCorrelationMatrix();
+            await this.computeH1Dimension();
+            await this._updateDerivedMetrics();
+            logger.info(`Sheaf adapted at step ${stepCount} with d_B=${d_B.toFixed(3)}, d_B_floq=${d_B_floq.toFixed(3)}.`);
+        } catch (e) {
+            logger.error(`Sheaf.adaptSheafTopology: Failed: ${e.message}`, { stack: e.stack });
+        }
+    }
+
+    visualizeActivity(scene, camera, renderer) {
+        if (!THREE) {
+            logger.error("Sheaf.visualizeActivity: THREE.js is not available.");
+            return;
+        }
+
+        const stalkGroup = new THREE.Group();
+        const vertexMap = new Map(this.graph.vertices.map((v, i) => [v, i]));
+        const sphereGeometry = new THREE.SphereGeometry(0.5, 16, 16);
+
+        this.stalks.forEach((stalk, v) => {
+            const norm = isFiniteVector(stalk) ? norm2(stalk) : 0;
+            const phase = this.floquetPD.phases[0] || 0;
+            const material = new THREE.MeshPhongMaterial({
+                color: new THREE.Color(0.2, 0.5 + norm * 0.5, 1.0),
+                emissive: new THREE.Color(0, norm * 0.2 * (this.rhythmicallyAware ? 1.5 * Math.cos(phase) : 1), 0.2)
+            });
+            const sphere = new THREE.Mesh(sphereGeometry, material);
+            sphere.position.set(vertexMap.get(v) * 2 - 7, norm * 2, 0);
+            stalkGroup.add(sphere);
+        });
+
+        this.graph.edges.forEach(([u, v, weight]) => {
+            const i = vertexMap.get(u);
+            const j = vertexMap.get(v);
+            const norm_u = norm2(this.stalks.get(u) || [0]);
+            const norm_v = norm2(this.stalks.get(v) || [0]);
+            const phase = this.floquetPD.phases[0] || 0;
+            const opacity = clamp((weight || 0) * this.cup_product_intensity * Math.cos(phase), 0.2, 0.8);
+
+            const geometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(i * 2 - 7, norm_u * 2, 0),
+                new THREE.Vector3(j * 2 - 7, norm_v * 2, 0)
+            ]);
+            const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({
+                color: 0x44aaFF,
+                transparent: true,
+                opacity
+            }));
+            stalkGroup.add(line);
+        });
+
+        if (this.floquetPD.births.length > 0) {
+            const barcodeGroup = new THREE.Group();
+            this.floquetPD.births.forEach((birth, idx) => {
+                const t = birth.time || idx;
+                const death_t = this.floquetPD.deaths[idx]?.time || t + 1;
+                const geometry = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(-7, -2 - idx * 0.2, 0),
+                    new THREE.Vector3(-7 + (death_t - t), -2 - idx * 0.2, 0)
+                ]);
+                const material = new THREE.LineBasicMaterial({
+                    color: 0xFF44AA,
+                    linewidth: 2
+                });
+                barcodeGroup.add(new THREE.Line(geometry, material));
+            });
+            stalkGroup.add(barcodeGroup);
+        }
+
+        scene.add(stalkGroup);
+        return stalkGroup;
+    }
+
+    saveState() {
+        const baseState = super.saveState();
+        return {
+            ...baseState,
+            cochainHistory: this.cochainHistory.getAll(),
+            flowHistory: this.flowHistory.getAll(),
+            persistenceDiagram: this.persistenceDiagram,
+            floquetPD: this.floquetPD,
+            selfAware: this.selfAware,
+            hierarchicallyAware: this.hierarchicallyAware,
+            diachronicallyAware: this.diachronicallyAware,
+            rhythmicallyAware: this.rhythmicallyAware
+        };
+    }
+
+    loadState(state) {
+        super.loadState(state);
+        this.cochainHistory = new CircularBuffer(20);
+        this.flowHistory = new CircularBuffer(50);
+        this.persistenceDiagram = state.persistenceDiagram || { births: [], deaths: [] };
+        this.floquetPD = state.floquetPD || { phases: [], births: [], deaths: [] };
+        this.selfAware = state.selfAware || false;
+        this.hierarchicallyAware = state.hierarchicallyAware || false;
+        this.diachronicallyAware = state.diachronicallyAware || false;
+        this.rhythmicallyAware = state.rhythmicallyAware || false;
+        (state.cochainHistory || []).forEach(item => this.cochainHistory.push(item));
+        (state.flowHistory || []).forEach(item => this.flowHistory.push(item));
+    }
+}
+
+export default FloquetPersistentSheaf;
+
+// --- END OF FILE qualia-sheaf.js ---
