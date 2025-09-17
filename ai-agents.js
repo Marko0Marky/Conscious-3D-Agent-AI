@@ -156,17 +156,21 @@ export class BaseAIAgent {
         // Compute Floquet multipliers for dynamic learning rate
         let lrAdjustment = 1.0;
         if (typeof flattenMatrix === 'function') {
-// ... in modulateParameters()
-try {
-    const correlationMatrix = this.owm.qualiaSheaf.correlationMatrix;
-    // Add validation for the correlation matrix
-    if (Array.isArray(correlationMatrix) && correlationMatrix.length > 0 && Array.isArray(correlationMatrix[0])) {
-        const floquetResult = await runWorkerTask('complexEigenvalues', { matrix: flattenMatrix(correlationMatrix) }, 10000);
-        maxFloquet = floquetResult.length > 0 ? Math.max(...floquetResult.map(v => Math.sqrt(v.re * v.re + v.im * v.im))) : 1;
-    }
-} catch (e) {
-    logger.error(`BaseAIAgent.modulateParameters: Error computing Floquet multipliers: ${e.message}`);
-}
+            try {
+                const correlationMatrix = this.owm.qualiaSheaf.correlationMatrix;
+                // Add validation for the correlation matrix
+                if (Array.isArray(correlationMatrix) && correlationMatrix.length > 0 && Array.isArray(correlationMatrix[0])) {
+                    const floquetResult = await runWorkerTask('complexEigenvalues', { matrix: flattenMatrix(correlationMatrix) }, 10000);
+                    const maxFloquet = floquetResult.length > 0 ? Math.max(...floquetResult.map(v => Math.sqrt(v.re * v.re + v.im * v.im))) : 1;
+                    lrAdjustment = clamp(1 + 0.02 * (maxFloquet - 1), 0.8, 1.2);
+                } else {
+                    // Skip the calculation if the matrix is invalid and use the default value
+                    lrAdjustment = 1.0; 
+                }
+            } catch (e) {
+                logger.error(`BaseAIAgent.learn: Error computing Floquet multipliers: ${e.message}`);
+                lrAdjustment = 1.0; // Fallback to default
+            }
         } else {
             logger.error('BaseAIAgent.learn: flattenMatrix is not defined. Skipping Floquet adjustment.');
             lrAdjustment = 1.0;
@@ -248,8 +252,12 @@ try {
         let maxFloquet = 1;
         if (typeof flattenMatrix === 'function') {
             try {
-                const floquetResult = await runWorkerTask('complexEigenvalues', { matrix: flattenMatrix(this.owm.qualiaSheaf.correlationMatrix) }, 10000);
-                maxFloquet = floquetResult.length > 0 ? Math.max(...floquetResult.map(v => Math.sqrt(v.re * v.re + v.im * v.im))) : 1;
+                const correlationMatrix = this.owm.qualiaSheaf.correlationMatrix;
+                // Add validation for the correlation matrix
+                if (Array.isArray(correlationMatrix) && correlationMatrix.length > 0 && Array.isArray(correlationMatrix[0])) {
+                    const floquetResult = await runWorkerTask('complexEigenvalues', { matrix: flattenMatrix(correlationMatrix) }, 10000);
+                    maxFloquet = floquetResult.length > 0 ? Math.max(...floquetResult.map(v => Math.sqrt(v.re * v.re + v.im * v.im))) : 1;
+                }
             } catch (e) {
                 logger.error(`BaseAIAgent.modulateParameters: Error computing Floquet multipliers: ${e.message}`);
             }
