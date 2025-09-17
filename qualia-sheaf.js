@@ -80,6 +80,8 @@ export class CircularBuffer {
 
 /**
  * Base EnhancedQualiaSheaf – Kernel for all theoremic extensions.
+ * Th. 1: Cohomological Binding Hypothesis – Harmonic flows on sheaf Laplacian for qualia coherence.
+ * Th. 3: Free Energy Qualia Principle – Sheaf priors precondition OWM gradients via KL-proxy minimization.
  */
 export class EnhancedQualiaSheaf {
     constructor(graphData, config = {}) {
@@ -137,6 +139,8 @@ export class EnhancedQualiaSheaf {
         this.projectionMatrices = new Map();
         this.isUpdating = false;
         this.qInput = null; // For intentionality
+        this.coherence = 0; // Th. 1: Cohomological coherence
+        this.currentCochain = zeroMatrix(this.graph.vertices.length, this.qDim); // For flow tracking
 
         logger.info(`Enhanced Qualia Sheaf constructed: vertices=${this.graph.vertices.length}, edges=${this.graph.edges.length}, triangles=${this.simplicialComplex.triangles.length}, tetrahedra=${this.simplicialComplex.tetrahedra.length}`);
     }
@@ -175,7 +179,7 @@ export class EnhancedQualiaSheaf {
         let finalTrianglesUpdated = [...explicitTriangles];
         explicitTetrahedra.forEach(tet => {
             if (!Array.isArray(tet) || tet.length !== 4) return;
-                        for (let i = 0; i < 4; i++) {
+            for (let i = 0; i < 4; i++) {
                 const newTri = tet.filter((_, idx) => idx !== i).sort();
                 if (!finalTrianglesUpdated.some(t => t.slice().sort().join(',') === newTri.join(','))) {
                     finalTrianglesUpdated.push(newTri);
@@ -906,6 +910,24 @@ export class EnhancedQualiaSheaf {
         }
     }
 
+    // Th. 1: Full coherence flow method
+    async computeCoherenceFlow(dt = 0.01) {
+        if (!this.laplacian) await this.computeLaplacian();
+        const sensoryInput = this.qInput || vecZeros(this.graph.vertices.length * this.qDim);
+        const flatCochain = flattenMatrix(this.currentCochain).flatData;
+        // Sparse Laplacian flow: -αLψ + βs
+        const laplacianTerm = this.csrMatVecMul(this.laplacian, flatCochain);
+        const flowUpdate = vecAdd(vecScale(laplacianTerm, -this.alpha * dt), vecScale(sensoryInput, this.beta * dt));
+        this.currentCochain = unflattenMatrix({
+            flatData: vecAdd(flatCochain, flowUpdate),
+            rows: this.graph.vertices.length,
+            cols: this.qDim
+        });
+        this.coherence = clamp(norm2(flatCochain) / Math.sqrt(this.graph.vertices.length * this.qDim), 0, 1);
+        return this.coherence;
+    }
+
+    // Full upgraded diffuseQualia with Th. 1 integration
     async diffuseQualia(state) {
         if (!this.ready) {
             logger.warn('Sheaf not ready for diffusion. Skipping.');
@@ -936,6 +958,10 @@ export class EnhancedQualiaSheaf {
         for (let i = 0; i < n; i++) {
             qInput[i] = state[Math.min(i, state.length - 1)] || 0;
         }
+
+        // Th. 1: Compute coherence flow as primary propagation
+        await this.computeCoherenceFlow();
+        this.qInput = qInput;
 
         const Lfull = zeroMatrix(N, N);
         const idxMap = new Map(this.graph.vertices.map((v, i) => [v, i]));
@@ -1652,6 +1678,16 @@ export class EnhancedQualiaSheaf {
         return this.structural_sensitivity;
     }
 
+    // Th. 3: Full free energy prior method
+    async computeFreeEnergyPrior(nextState, predictedState) {
+        if (!this.owm || !isFiniteVector(nextState) || !isFiniteVector(predictedState)) return vecZeros(this.qDim);
+        // Simplified KL-divergence: L2 norm as proxy
+        const klProxy = norm2(vecSub(nextState, predictedState)) * 0.1;
+        const coherenceWeight = this.coherence || 0.5;
+        const prior = vecScale(this.getStalksAsVector().slice(0, this.qDim), klProxy * coherenceWeight);
+        return isFiniteVector(prior) ? prior : vecZeros(this.qDim);
+    }
+
     async _updateDerivedMetrics() {
         try {
             await this.computeGluingInconsistency();
@@ -1793,13 +1829,14 @@ export class EnhancedQualiaSheaf {
             phi: this.phi,
             h1Dimension: this.h1Dimension,
             gestaltUnity: this.gestaltUnity,
-                        stability: this.stability,
+            stability: this.stability,
             diffusionEnergy: this.diffusionEnergy,
             inconsistency: this.inconsistency,
             feel_F: this.feel_F,
             intentionality_F: this.intentionality_F,
             cup_product_intensity: this.cup_product_intensity,
             structural_sensitivity: this.structural_sensitivity,
+            coherence: this.coherence, // Th. 1
             stalkHistory: this.stalkHistory.getAll(),
             windowedStates: this.windowedStates.getAll(),
             phiHistory: this.phiHistory.getAll(),
@@ -1831,6 +1868,7 @@ export class EnhancedQualiaSheaf {
         this.intentionality_F = state.intentionality_F || 0;
         this.cup_product_intensity = state.cup_product_intensity || 0;
         this.structural_sensitivity = state.structural_sensitivity || 0;
+        this.coherence = state.coherence || 0; // Th. 1
         this.stalkHistory = new CircularBuffer(this.stalkHistorySize);
         (state.stalkHistory || []).forEach(item => this.stalkHistory.push(item));
         this.windowedStates = new CircularBuffer(this.windowSize);
@@ -2178,8 +2216,8 @@ class AdjunctionReflexiveSheaf extends RecursiveTopologicalSheaf {
         const eMap = new Map(this.graph.edges.map((e, i) => [e.slice(0, 2).sort().join(','), i]));
         for (const tri of this.simplicialComplex.triangles) {
             const edges = [
-                [tri[0], tri[1]].sort().join(','),
-                [tri[1], tri[2]].sort().join(','),
+                [tri[0], tri[1]].sort().join(','), 
+                [tri[1], tri[2]].sort().join(','), 
                 [tri[2], tri[0]].sort().join(',')
             ];
             const idxs = edges.map(e => eMap.get(e)).filter(i => i !== undefined);
@@ -2389,7 +2427,7 @@ export class FloquetPersistentSheaf extends PersistentAdjunctionSheaf {
                 const A_omega = tf.linalg.matrixPower(A_tensor, omega);
                 const result = await A_omega.data();
                 tf.dispose([A_tensor, A_omega]);
-                return unflattenMatrix(result, A_t.length, A_t[0].length);
+                return unflattenMatrix({ flatData: new Float32Array(result), rows: A_t.length, cols: A_t[0].length });
             } catch (e) {
                 logger.warn(`_monodromy: TF.js matrixPower failed: ${e.message}`);
             }
@@ -2606,7 +2644,7 @@ export class FloquetPersistentSheaf extends PersistentAdjunctionSheaf {
         }
 
         try {
-            // Base diffusion
+            // Base diffusion with Th. 1 coherence
             await this.diffuseQualia(state);
 
             // Th14: Recursive fixed-point
@@ -2672,106 +2710,82 @@ export class FloquetPersistentSheaf extends PersistentAdjunctionSheaf {
             await this.computeCorrelationMatrix();
             await this.computeH1Dimension();
             await this._updateDerivedMetrics();
-            logger.info(`Sheaf adapted at step ${stepCount} with d_B=${d_B.toFixed(3)}, d_B_floq=${d_B_floq.toFixed(3)}.`);
-        } catch (e) {
-            logger.error(`Sheaf.adaptSheafTopology: Failed: ${e.message}`, { stack: e.stack });
-        }
+            logger.info(`Sheaf adapted at step ${stepCount}    // End of adaptSheafTopology method
+    with Floquet-enhanced topology: d_B=${d_B.toFixed(3)}, d_B_floq=${d_B_floq.toFixed(3)}`);
+    } catch (e) {
+      logger.error(`Sheaf.adaptSheafTopology: Failed: ${e.message}`, { stack: e.stack });
+    }
+  }
+
+  visualizeFloquetPD(scene, camera, renderer) {
+    if (!THREE) {
+      logger.error("Sheaf.visualizeFloquetPD: THREE.js is not available.");
+      return;
     }
 
-    visualizeActivity(scene, camera, renderer) {
-        if (!THREE) {
-            logger.error("Sheaf.visualizeActivity: THREE.js is not available.");
-            return;
-        }
+    const pdGroup = new THREE.Group();
+    const geometry = new THREE.SphereGeometry(0.1, 8, 8);
 
-        const stalkGroup = new THREE.Group();
-        const vertexMap = new Map(this.graph.vertices.map((v, i) => [v, i]));
-        const sphereGeometry = new THREE.SphereGeometry(0.5, 16, 16);
+    this.floquetPD.births.forEach((birth, i) => {
+      const death = this.floquetPD.deaths[i] || { time: birth.time + this.delta, phase: birth.phase };
+      const lifetime = death.time - birth.time;
+      if (lifetime < this.delta) return;
 
-        this.stalks.forEach((stalk, v) => {
-            const norm = isFiniteVector(stalk) ? norm2(stalk) : 0;
-            const phase = this.floquetPD.phases[0] || 0;
-            const material = new THREE.MeshPhongMaterial({
-                color: new THREE.Color(0.2, 0.5 + norm * 0.5, 1.0),
-                emissive: new THREE.Color(0, norm * 0.2 * (this.rhythmicallyAware ? 1.5 * Math.cos(phase) : 1), 0.2)
-            });
-            const sphere = new THREE.Mesh(sphereGeometry, material);
-            sphere.position.set(vertexMap.get(v) * 2 - 7, norm * 2, 0);
-            stalkGroup.add(sphere);
-        });
+      const material = new THREE.MeshPhongMaterial({
+        color: new THREE.Color(
+          0.5 + 0.5 * Math.cos(birth.phase),
+          0.5 + 0.5 * Math.sin(birth.phase),
+          0.5
+        ),
+        emissive: new THREE.Color(0.1, 0.1, 0.2)
+      });
+      const sphere = new THREE.Mesh(geometry, material);
+      sphere.position.set(
+        birth.time * 0.1,
+        lifetime * 0.1,
+        birth.phase / (2 * Math.PI)
+      );
+      pdGroup.add(sphere);
+    });
 
-        this.graph.edges.forEach(([u, v, weight]) => {
-            const i = vertexMap.get(u);
-            const j = vertexMap.get(v);
-            const norm_u = norm2(this.stalks.get(u) || [0]);
-            const norm_v = norm2(this.stalks.get(v) || [0]);
-            const phase = this.floquetPD.phases[0] || 0;
-            const opacity = clamp((weight || 0) * this.cup_product_intensity * Math.cos(phase), 0.2, 0.8);
+    scene.add(pdGroup);
+    return pdGroup;
+  }
 
-            const geometry = new THREE.BufferGeometry().setFromPoints([
-                new THREE.Vector3(i * 2 - 7, norm_u * 2, 0),
-                new THREE.Vector3(j * 2 - 7, norm_v * 2, 0)
-            ]);
-            const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({
-                color: 0x44aaFF,
-                transparent: true,
-                opacity
-            }));
-            stalkGroup.add(line);
-        });
+  saveState() {
+    const baseState = super.saveState();
+    return {
+      ...baseState,
+      flowHistory: this.flowHistory.getAll(),
+      persistenceDiagram: this.persistenceDiagram,
+      floquetPD: this.floquetPD,
+      monodromy: this.monodromy,
+      cochainHistory: this.cochainHistory.getAll(),
+      selfAware: this.selfAware,
+      hierarchicallyAware: this.hierarchicallyAware,
+      diachronicallyAware: this.diachronicallyAware,
+      rhythmicallyAware: this.rhythmicallyAware
+    };
+  }
 
-        if (this.floquetPD.births.length > 0) {
-            const barcodeGroup = new THREE.Group();
-            this.floquetPD.births.forEach((birth, idx) => {
-                const t = birth.time || idx;
-                const death_t = this.floquetPD.deaths[idx]?.time || t + 1;
-                const geometry = new THREE.BufferGeometry().setFromPoints([
-                    new THREE.Vector3(-7, -2 - idx * 0.2, 0),
-                    new THREE.Vector3(-7 + (death_t - t), -2 - idx * 0.2, 0)
-                ]);
-                const material = new THREE.LineBasicMaterial({
-                    color: 0xFF44AA,
-                    linewidth: 2
-                });
-                barcodeGroup.add(new THREE.Line(geometry, material));
-            });
-            stalkGroup.add(barcodeGroup);
-        }
-
-        scene.add(stalkGroup);
-        return stalkGroup;
+  loadState(state) {
+    if (!state || typeof state !== 'object') {
+      logger.error('Sheaf.loadState: Invalid state object.');
+      return;
     }
-
-    saveState() {
-        const baseState = super.saveState();
-        return {
-            ...baseState,
-            cochainHistory: this.cochainHistory.getAll(),
-            flowHistory: this.flowHistory.getAll(),
-            persistenceDiagram: this.persistenceDiagram,
-            floquetPD: this.floquetPD,
-            selfAware: this.selfAware,
-            hierarchicallyAware: this.hierarchicallyAware,
-            diachronicallyAware: this.diachronicallyAware,
-            rhythmicallyAware: this.rhythmicallyAware
-        };
-    }
-
-    loadState(state) {
-        super.loadState(state);
-        this.cochainHistory = new CircularBuffer(20);
-        this.flowHistory = new CircularBuffer(50);
-        this.persistenceDiagram = state.persistenceDiagram || { births: [], deaths: [] };
-        this.floquetPD = state.floquetPD || { phases: [], births: [], deaths: [] };
-        this.selfAware = state.selfAware || false;
-        this.hierarchicallyAware = state.hierarchicallyAware || false;
-        this.diachronicallyAware = state.diachronicallyAware || false;
-        this.rhythmicallyAware = state.rhythmicallyAware || false;
-        (state.cochainHistory || []).forEach(item => this.cochainHistory.push(item));
-        (state.flowHistory || []).forEach(item => this.flowHistory.push(item));
-    }
+    super.loadState(state);
+    this.flowHistory = new CircularBuffer(state.flowHistory?.length || 50);
+    (state.flowHistory || []).forEach(item => this.flowHistory.push(item));
+    this.persistenceDiagram = state.persistenceDiagram || { births: [], deaths: [] };
+    this.floquetPD = state.floquetPD || { phases: [], births: [], deaths: [] };
+    this.monodromy = state.monodromy || null;
+    this.cochainHistory = new CircularBuffer(state.cochainHistory?.length || 20);
+    (state.cochainHistory || []).forEach(item => this.cochainHistory.push(item));
+    this.selfAware = state.selfAware || false;
+    this.hierarchicallyAware = state.hierarchicallyAware || false;
+    this.diachronicallyAware = state.diachronicallyAware || false;
+    this.rhythmicallyAware = state.rhythmicallyAware || false;
+  }
 }
-
-export default FloquetPersistentSheaf;
 
 // --- END OF FILE qualia-sheaf.js ---
