@@ -1,4 +1,3 @@
-
 import { logger, showLoading, hideLoading, clamp, isFiniteVector, norm2, vecZeros, vecAdd } from './utils.js';
 import { OntologicalWorldModel } from './owm.js';
 import { LearningAIAgent, StrategicAI } from './ai-agents.js';
@@ -33,15 +32,14 @@ class MainApp {
         this.toggleSimButton = document.getElementById('toggleSimButton');
         this.resetSimButton = document.getElementById('resetSimButton');
         this.fastForwardButton = document.getElementById('fastForwardButton');
-        
+
         if (this.toggleSimButton) this.toggleSimButton.disabled = true;
         if (this.resetSimButton) this.resetSimButton.disabled = true;
         if (this.fastForwardButton) this.fastForwardButton.disabled = true;
         document.getElementById('status').textContent = 'Initializing... Please wait.';
 
         this.clock = new THREE.Clock();
-        // FIX: Start clock immediately to ensure getDelta() returns valid values
-        this.clock.start();
+        this.clock.start(); // Start clock immediately to ensure getDelta() returns valid values
         this.chartData = { qValue: [], score: [], cupProduct: [], structuralSensitivity: [], coherence: [], freeEnergy: [] };
         this.chartEMA = { qValue: 0, score: 0, cupProduct: 0, structuralSensitivity: 0, coherence: 0, freeEnergy: 0 };
         this.EMA_ALPHA = 0.1;
@@ -58,7 +56,6 @@ class MainApp {
         this.isFastForward = false;
         this.FAST_FORWARD_MULTIPLIER = 3;
         this.frameCount = 0;
-        this.sheafStepCount = 0;
         this.sheafAdaptFrequency = 200;
         this.consecutiveZeroLosses = 0;
         this.MAX_ZERO_LOSSES = 50;
@@ -67,7 +64,6 @@ class MainApp {
         this.boundGameLoop = this.gameLoop.bind(this);
         this.bindEvents();
         this.setupTooltips();
-        // FIX: Call initialize immediately to avoid delays
         this.initialize().catch(e => {
             logger.error(`Initialization failed in constructor: ${e.message}`, e);
             document.getElementById('status').textContent = `Fatal Error: ${e.message}`;
@@ -90,12 +86,11 @@ class MainApp {
         this.opponentViz = new NeuralNetworkVisualizer('opponentBrainCanvas', this.opponent_worldModel);
         logger.info("MainApp fully initialized, including visualizers. Ready for interaction.");
         document.getElementById('status').textContent = 'Ready. Press Toggle Sim to Start.';
-        
+
         if (this.toggleSimButton) this.toggleSimButton.disabled = false;
         if (this.resetSimButton) this.resetSimButton.disabled = false;
         if (this.fastForwardButton) this.fastForwardButton.disabled = false;
         this.isInitialized = true;
-        // FIX: Ensure visualization is updated after initialization
         await this.updateVisualization();
     }
 
@@ -105,29 +100,40 @@ class MainApp {
         showLoading('mainBrain', 'Building Main AI World Model...');
         showLoading('opponentBrain', 'Building Opponent AI World Model...');
         showLoading('metrics', 'Initializing Qualia Sheaf...');
-    
+
         try {
             this.game = new ThreeDeeGame(this.gameCanvas);
             await this.game.reset();
             logger.info('ThreeDeeGame initialized successfully.');
-    
+
             const STATE_DIM = 13;
             const ACTION_DIM = 4;
             const Q_DIM = 7;
-    
+
+            // Simplified config to match working version, with defaults in FloquetPersistentSheaf
             this.mainAI_qualiaSheaf = new FloquetPersistentSheaf({}, { stateDim: STATE_DIM, qDim: Q_DIM });
             this.opponent_qualiaSheaf = new FloquetPersistentSheaf({}, { stateDim: STATE_DIM, qDim: Q_DIM });
 
             this.mainAI_worldModel = new OntologicalWorldModel(STATE_DIM, ACTION_DIM, Q_DIM, [64, 64], false, this.mainAI_qualiaSheaf);
             this.opponent_worldModel = new OntologicalWorldModel(STATE_DIM, ACTION_DIM, Q_DIM, [64, 64], true, this.opponent_qualiaSheaf);
-            
+
             this.mainAI_qualiaSheaf.setOWM(this.mainAI_worldModel);
             this.opponent_qualiaSheaf.setOWM(this.opponent_worldModel);
+            logger.info('QualiaSheaf linked to world models:', {
+                mainSheafOWM: !!this.mainAI_qualiaSheaf.owm,
+                opponentSheafOWM: !!this.opponent_qualiaSheaf.owm
+            });
 
             this.mainAI = new LearningAIAgent(this.mainAI_worldModel);
-            this.opponentAI = new StrategicAI(this.opponent_worldModel);
-            this.mainStrategicAI = new StrategicAI(this.mainAI_worldModel);
+            this.opponentAI = new StrategicAI(this.opponent_worldModel); // Direct StrategicAI
+            this.mainStrategicAI = new StrategicAI(this.mainAI_worldModel); // Direct StrategicAI
             this.opponentStrategicAI = new StrategicAI(this.opponent_worldModel);
+            logger.info('AI agents created:', {
+                mainAI: !!this.mainAI,
+                opponentAI: !!this.opponentAI,
+                mainStrategicAI: !!this.mainStrategicAI,
+                opponentStrategicAI: !!this.opponentStrategicAI
+            });
 
             await Promise.all([
                 this.mainAI_qualiaSheaf.initialize(),
@@ -135,12 +141,22 @@ class MainApp {
                 this.mainAI_worldModel.initialize(),
                 this.opponent_worldModel.initialize()
             ]);
-    
+            logger.info('Initialization completed for sheafs and world models.');
+
+            // Verify linking post-initialization
+            if (!this.mainAI_worldModel.qualiaSheaf || !this.opponent_worldModel.qualiaSheaf) {
+                logger.error('setupGameAndAIs: qualiaSheaf not properly linked to world models');
+                throw new Error('qualiaSheaf linking failed');
+            }
+            if (!this.mainAI_qualiaSheaf.owm || !this.opponent_qualiaSheaf.owm) {
+                logger.error('setupGameAndAIs: worldModel not properly linked to qualiaSheaf');
+                throw new Error('worldModel linking failed');
+            }
+
             await initLive2D(this.clock, this.mainAI_qualiaSheaf);
             await initConceptVisualization(this.clock, this.mainAI_qualiaSheaf);
-
             await this.setupQualiaAttentionPanel();
-    
+
         } catch (e) {
             logger.error('CRITICAL FAILURE during setupGameAndAIs:', e);
             document.getElementById('status').textContent = `Initialization Failed: ${e.message}`;
@@ -152,7 +168,7 @@ class MainApp {
             hideLoading('metrics');
         }
     }
-    
+
     _stateToVector(state) {
         if (!state || !state.ai || !state.player || !state.aiTarget) {
             logger.warn("Received incomplete state for vector conversion. Returning zeros.");
@@ -169,7 +185,11 @@ class MainApp {
     }
 
     mapEmotionsForAvatar(worldModel) {
-        const qualia = worldModel.qualiaSheaf;
+        const qualia = worldModel?.qualiaSheaf;
+        if (!qualia) {
+            logger.warn('mapEmotionsForAvatar: qualiaSheaf is undefined. Returning default emotions.');
+            return tf ? tf.tensor([[0, 0, 0, 0, 0, 0]]) : { arraySync: () => [[0, 0, 0, 0, 0, 0]], dispose: () => {} };
+        }
         const h1Influence = clamp(qualia.h1Dimension / (qualia.graph.edges.length || 1), 0, 1);
         const joy = clamp(qualia.gestaltUnity * qualia.stability, 0, 1);
         const fear = clamp(1 - qualia.stability, 0, 1);
@@ -179,15 +199,17 @@ class MainApp {
         const surprise = clamp(Math.abs(qualia.phi - this.lastPhi) / 0.1, 0, 1);
         this.lastPhi = qualia.phi;
         const emotionVec = [joy, fear, curiosity, frustration, calm, surprise];
-        
         return tf ? tf.tensor([emotionVec]) : { arraySync: () => [emotionVec], dispose: () => {} };
     }
 
     async updateVisualization() {
         if (!this.isInitialized || !this.mainAI_worldModel?.ready || !this.mainAI) return;
 
-        const qualia = this.mainAI_worldModel.qualiaSheaf;
-        if (!qualia) return;
+        const qualia = this.mainAI_worldModel?.qualiaSheaf;
+        if (!qualia) {
+            logger.warn('updateVisualization: qualiaSheaf is undefined.');
+            return;
+        }
 
         requestAnimationFrame(() => {
             document.getElementById('phi-display').textContent = `Φ: ${clamp(qualia.phi, 0, 5).toFixed(5)}`;
@@ -340,12 +362,15 @@ class MainApp {
     }
 
     updatePerformanceCharts() {
-        if (!this.mainAI || !this.game || !this.mainAI_worldModel) return;
+        if (!this.mainAI || !this.game || !this.mainAI_worldModel) {
+            logger.warn('updatePerformanceCharts: Main AI or game not initialized.');
+            return;
+        }
         const stateValue = this.mainAI_worldModel.lastStateValue || 0;
         const score = this.game.score.ai - this.game.score.player;
-        const cupProduct = this.mainAI_worldModel.qualiaSheaf.cup_product_intensity || 0;
-        const structuralSensitivity = this.mainAI_worldModel.qualiaSheaf.structural_sensitivity || 0;
-        const coherence = this.mainAI_worldModel.qualiaSheaf.coherence || 0;
+        const cupProduct = this.mainAI_worldModel.qualiaSheaf?.cup_product_intensity || 0;
+        const structuralSensitivity = this.mainAI_worldModel.qualiaSheaf?.structural_sensitivity || 0;
+        const coherence = this.mainAI_worldModel.qualiaSheaf?.coherence || 0;
         const freeEnergy = this.mainAI_worldModel.freeEnergy || 0;
 
         this.chartEMA.qValue = this.EMA_ALPHA * stateValue + (1 - this.EMA_ALPHA) * this.chartEMA.qValue;
@@ -373,17 +398,14 @@ class MainApp {
     }
 
     async gameLoop(_timestamp, isManualStep = false) {
-        if (!this.isRunning && !isManualStep) {
-            return;
-        }
+        if (!this.isRunning && !isManualStep) return;
         if (!this.isInitialized || !this.mainAI_worldModel?.ready || !this.opponent_worldModel?.ready || !this.mainViz || !this.opponentViz) {
-            logger.warn(`Game loop waiting for full initialization...`);
-            // FIX: Retry initialization if components are not ready
+            logger.warn('Game loop waiting for full initialization...');
             if (!this.isInitialized) {
                 await this.initialize().catch(e => {
                     logger.error(`Re-initialization failed: ${e.message}`, e);
                     this.stop();
-                    document.getElementById('status').textContent = `Error: Initialization failed.`;
+                    document.getElementById('status').textContent = 'Error: Initialization failed.';
                 });
             }
             if (this.isRunning && !isManualStep) {
@@ -394,13 +416,12 @@ class MainApp {
 
         try {
             this.game.scene.updateMatrixWorld(true);
-            // FIX: Ensure deltaTime is valid by clamping to a reasonable range
             const deltaTime = Math.min(this.clock.getDelta(), 0.1); // Prevent large deltaTime spikes
             const stepsPerFrame = isManualStep ? 1 : (this.isFastForward ? this.FAST_FORWARD_MULTIPLIER : 1);
-            
+
             let mainDecision = { action: 'IDLE', chosenActionIndex: 3, activations: [] };
             let opponentDecision = { action: 'IDLE', chosenActionIndex: 3, activations: [] };
-            
+
             for (let step = 0; step < stepsPerFrame; step++) {
                 this.frameCount++;
                 const preGameState = this.game.getState();
@@ -412,7 +433,7 @@ class MainApp {
                         this.opponent_qualiaSheaf.update(rawStateVector, this.frameCount)
                     ]);
                 }
-                
+
                 try {
                     [mainDecision, opponentDecision] = await Promise.all([
                         this.mainAI.makeDecision(preGameState),
@@ -420,6 +441,8 @@ class MainApp {
                     ]);
                 } catch (e) {
                     logger.error(`Decision-making failed: ${e.message}. Agents will perform IDLE action.`);
+                    mainDecision = { action: 'IDLE', chosenActionIndex: 3, activations: [] };
+                    opponentDecision = { action: 'IDLE', chosenActionIndex: 3, activations: [] };
                 }
 
                 this.game.setAIAction(mainDecision.action);
@@ -444,14 +467,23 @@ class MainApp {
                     if (this.consecutiveZeroLosses > this.MAX_ZERO_LOSSES) {
                         logger.warn('Stalled learning detected; reinitializing AIs.');
                         await this.resetAI();
-                        return; 
+                        return;
                     }
                 } else {
                     this.consecutiveZeroLosses = 0;
                 }
 
-                this.mainStrategicAI.observe(gameUpdateResult.aReward);
-                this.opponentStrategicAI.observe(gameUpdateResult.pReward);
+                // Defensive checks for StrategicAI
+                if (this.mainStrategicAI?.learningAI?.owm?.qualiaSheaf) {
+                    this.mainStrategicAI.observe(gameUpdateResult.aReward);
+                } else {
+                    logger.warn('mainStrategicAI.observe skipped: qualiaSheaf is undefined');
+                }
+                if (this.opponentStrategicAI?.learningAI?.owm?.qualiaSheaf) {
+                    this.opponentStrategicAI.observe(gameUpdateResult.pReward);
+                } else {
+                    logger.warn('opponentStrategicAI.observe skipped: qualiaSheaf is undefined');
+                }
 
                 if (this.frameCount % 50 === 0) {
                     this.mainStrategicAI.modulateParameters();
@@ -468,10 +500,10 @@ class MainApp {
                     logger.info(`Sheaf state persisted at frame ${this.frameCount}.`);
                 }
             }
-            
+
             this.updateUI(mainDecision, opponentDecision);
             this.game.render();
-            
+
         } catch (error) {
             logger.error(`gameLoop error: ${error.message}`, error);
             this.stop();
@@ -482,7 +514,7 @@ class MainApp {
             }
         }
     }
-    
+
     updateUI(mainDecision, opponentDecision) {
         document.getElementById('player-score').textContent = this.game.score.player;
         document.getElementById('ai-score').textContent = this.game.score.ai;
@@ -495,7 +527,7 @@ class MainApp {
             this.updateVisualization();
         }
     }
-    
+
     toggleGame() {
         if (!this.isInitialized) {
             logger.warn("Cannot toggle game: Initialization not complete.");
@@ -506,35 +538,33 @@ class MainApp {
         this.isRunning = !this.isRunning;
         this.toggleSimButton.textContent = this.isRunning ? '⏸️ Pause' : '🚀 Start Sim';
         this.toggleSimButton.classList.toggle('active', this.isRunning);
-        
+
         if (this.isRunning) {
             this.game.resumeAudioContext();
             document.getElementById('status').textContent = this.isFastForward ? 'Fast Forward Active' : 'Conscious AI Active';
-            // FIX: Ensure clock is running and reset elapsed time
             if (!this.clock.running) {
                 this.clock.start();
             }
-            // FIX: Force an immediate game loop iteration
             requestAnimationFrame(() => this.gameLoop(null, false));
         } else {
             this.clock.stop();
             document.getElementById('status').textContent = 'Paused';
         }
     }
-    
+
     toggleFastForward() {
         this.isFastForward = !this.isFastForward;
         this.fastForwardButton.classList.toggle('active', this.isFastForward);
         this.fastForwardButton.innerHTML = this.isFastForward ? 'Normal Speed 🐢' : 'Fast ⏩';
         if (this.isFastForward && !this.isRunning) this.toggleGame();
     }
-    
+
     stop() {
         this.isRunning = false;
         this.toggleSimButton.textContent = '🚀 Start Sim';
         this.toggleSimButton.classList.remove('active');
     }
-    
+
     async resetAI() {
         this.stop();
         logger.info('Resetting all game and AI states...');
@@ -543,7 +573,6 @@ class MainApp {
             if (tf) tf.disposeVariables();
             await this.setupGameAndAIs();
             this.frameCount = 0;
-            this.sheafStepCount = 0;
             this.consecutiveZeroLosses = 0;
             this.chartData = { qValue: [], score: [], cupProduct: [], structuralSensitivity: [], coherence: [], freeEnergy: [] };
             this.chartEMA = { qValue: 0, score: 0, cupProduct: 0, structuralSensitivity: 0, coherence: 0, freeEnergy: 0 };
@@ -640,7 +669,6 @@ async function bootstrapApp() {
         }
 
         window.mainApp = new MainApp();
-        // Note: initialize is now called in constructor
         function positionVertices() {
             const graph = document.getElementById('sheafGraph');
             if (!graph) return;
@@ -657,7 +685,7 @@ async function bootstrapApp() {
         if (graphPanel) new ResizeObserver(positionVertices).observe(graphPanel);
         window.addEventListener('resize', positionVertices);
         positionVertices();
-        
+
     } catch (e) {
         logger.error(`Application Bootstrap failed: ${e.message}`, e);
         document.getElementById('status').textContent = `Fatal Error: ${e.message}`;
@@ -667,8 +695,10 @@ async function bootstrapApp() {
 window.addEventListener('load', bootstrapApp);
 window.addEventListener('beforeunload', () => {
     if (window.mainApp) {
-        const mainState = window.mainApp.mainAI_qualiaSheaf.saveState();
-        localStorage.setItem('mainSheafState', JSON.stringify(mainState));
+        const mainState = window.mainApp.mainAI_qualiaSheaf?.saveState();
+        if (mainState) {
+            localStorage.setItem('mainSheafState', JSON.stringify(mainState));
+        }
     }
     cleanupLive2D();
     cleanupConceptVisualization();
