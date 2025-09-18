@@ -124,6 +124,12 @@ export async function initConceptVisualization(mainClock, sheaf) {
     floquetPDGroup.name = 'floquetPDGroup';
     scene.add(floquetPDGroup);
 
+    // Verify scene initialization
+    if (!scene || typeof scene.getObjectByName !== 'function') {
+        logger.error('initConceptVisualization: Scene initialization failed.');
+        return false;
+    }
+
     // Add resize listener
     window.addEventListener('resize', onWindowResize);
     initialized = true;
@@ -281,17 +287,28 @@ export function updateAgentSimulationVisuals(agent, canvas, ctx) {
         };
     }
 
+    // Apply DPI scaling
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+        canvas.style.width = `${rect.width}px`;
+        canvas.style.height = `${rect.height}px`;
+    }
+
     try {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
     } catch (e) {
         logger.error('updateAgentSimulationVisuals: Error clearing canvas:', e);
         return;
     }
 
-    const scaleX = canvas.width / 100;
-    const scaleY = canvas.height / 100;
-    const offsetX = canvas.width / 2;
-    const offsetY = canvas.height / 2;
+    const scaleX = (canvas.width / dpr) / 100;
+    const scaleY = (canvas.height / dpr) / 100;
+    const offsetX = (canvas.width / dpr) / 2;
+    const offsetY = (canvas.height / dpr) / 2;
 
     try {
         ctx.save();
@@ -403,34 +420,48 @@ export function renderConceptVisualization() {
 }
 
 // Th. 17: Floquet PD Visualization
-export function visualizeFloquetPD(scene, camera, renderer) {
-    if (!initialized || !sheafInstance) {
-        logger.warn('visualizeFloquetPD: Visualization not initialized or sheaf missing.');
+// Th. 17: Floquet PD Visualization
+export function visualizeFloquetPD(qualiaSheaf) {
+    if (!initialized || !scene || typeof scene.getObjectByName !== 'function') {
+        logger.warn('visualizeFloquetPD: Visualization not initialized or scene invalid.', { initialized });
         return null;
     }
 
-    if (!THREE) {
-        logger.error('visualizeFloquetPD: THREE.js is not available.');
+    // Validate qualiaSheaf structure
+    if (!qualiaSheaf || !qualiaSheaf.complex || !Array.isArray(qualiaSheaf.complex.vertices)) {
+        logger.warn('visualizeFloquetPD: Invalid qualiaSheaf structure.', { qualiaSheaf });
         return null;
     }
 
     // Clear existing PD group
     const existingPD = scene.getObjectByName('floquetPDGroup');
-    if (existingPD) scene.remove(existingPD);
+    if (existingPD) {
+        existingPD.children.forEach(child => {
+            child.geometry?.dispose();
+            child.material?.dispose();
+        });
+        scene.remove(existingPD);
+    }
 
     const pdGroup = new THREE.Group();
     pdGroup.name = 'floquetPDGroup';
     const geometry = new THREE.SphereGeometry(0.1, 8, 8);
 
-    if (!sheafInstance.floquetPD || !Array.isArray(sheafInstance.floquetPD.births)) {
-        logger.warn('visualizeFloquetPD: Invalid or missing floquetPD data. Skipping.');
-        return null;
+    // Check for valid floquetPD data
+    if (!qualiaSheaf.floquetPD || !Array.isArray(qualiaSheaf.floquetPD.births)) {
+        logger.warn('visualizeFloquetPD: Missing or invalid floquetPD data. Rendering empty PD group.');
+        scene.add(pdGroup);
+        renderer.render(scene, camera);
+        floquetPDGroup = pdGroup;
+        return pdGroup;
     }
 
-    sheafInstance.floquetPD.births.forEach((birth, i) => {
-        const death = sheafInstance.floquetPD.deaths[i] || { time: birth.time + (sheafInstance.delta || 0.1), phase: birth.phase };
+    // Process PD births and deaths
+    const delta = qualiaSheaf.delta || 0.1;
+    qualiaSheaf.floquetPD.births.forEach((birth, i) => {
+        const death = qualiaSheaf.floquetPD.deaths?.[i] || { time: birth.time + delta, phase: birth.phase };
         const lifetime = death.time - birth.time;
-        if (lifetime < (sheafInstance.delta || 0.1)) return;
+        if (lifetime < delta) return;
 
         const material = new THREE.MeshPhongMaterial({
             color: new THREE.Color(
@@ -450,6 +481,9 @@ export function visualizeFloquetPD(scene, camera, renderer) {
     });
 
     scene.add(pdGroup);
+    renderer.render(scene, camera);
+    floquetPDGroup = pdGroup;
+    logger.info('visualizeFloquetPD: Successfully rendered Floquet PD with ' + pdGroup.children.length + ' spheres.');
     return pdGroup;
 }
 
