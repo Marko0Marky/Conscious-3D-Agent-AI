@@ -1,14 +1,16 @@
 // --- START OF FILE viz-concepts.js ---
-// --- UPDATED VERSION: Uses InstancedMesh with legacy node styles (fixed color 0x4af, emissive 0x001122) ---
-// Integrates high-performance InstancedMesh with game state updates, RIH score, and edge weighting.
+// FLOQUET-ENHANCED VERSION: InstancedMesh with coherence-modulated animations, Floquet PD spheres, and free-energy cores
+// Integrates Th. 1–3 & 14–17: Harmonic flows scale nodes, PD bars birth on rhythmic awareness, emergence pulses with Φ_SA cascade.
+
 import { logger, clamp, norm2, vecZeros } from './utils.js';
+import { FloquetPersistentSheaf } from './qualia-sheaf.js';
 
 // Explicit ES module imports for Three.js and its examples
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js';
 import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/renderers/CSS2DRenderer.js';
 
-// Globals
+// Global variables
 let scene, camera, renderer, labelRenderer, controls;
 let nodes = {}; // { vertexId: { label: CSS2DObject, name: string, qualia: vec, instanceId: int, basePosition: Vector3, gameLink?: string } }
 let edges = []; // { line: Line, u: string, v: string }
@@ -19,273 +21,21 @@ let initialized = false;
 let sheafInstance = null;
 
 // Dynamic elements (not part of the instanced graph)
-let agentStateMesh, agentStateLabel, emergenceCoreMesh, emergenceCoreLabel;
+let agentStateMesh, agentStateLabel, emergenceCoreMesh, emergenceCoreLabel, floquetPDGroup;
 
 // A dummy object to help with matrix transformations for the instanced mesh
 const dummy = new THREE.Object3D();
 
 const VERTEX_MAP = {
-    'agent_x': { name: 'Agent-X', gameLink: 'agentX' }, 'agent_z': { name: 'Agent-Z', gameLink: 'agentZ' },
-    'agent_rot': { name: 'Agent-Rot', gameLink: 'agentRot' }, 'target_x': { name: 'Target-X', gameLink: 'targetX' },
-    'target_z': { name: 'Target-Z', gameLink: 'targetZ' }, 'vec_dx': { name: 'Vec-DX', gameLink: null },
-    'vec_dz': { name: 'Vec-DZ', gameLink: null }, 'dist_target': { name: 'Dist-Target', gameLink: 'dist' }
+    'agent_x': { name: 'Agent-X', gameLink: 'agentX' },
+    'agent_z': { name: 'Agent-Z', gameLink: 'agentZ' },
+    'agent_rot': { name: 'Agent-Rot', gameLink: 'agentRot' },
+    'target_x': { name: 'Target-X', gameLink: 'targetX' },
+    'target_z': { name: 'Target-Z', gameLink: 'targetZ' },
+    'vec_dx': { name: 'Vec-DX', gameLink: null },
+    'vec_dz': { name: 'Vec-DZ', gameLink: null },
+    'dist_target': { name: 'Dist-Target', gameLink: 'dist' }
 };
-
-export function initConceptVisualization(mainClock, sheaf) {
-    if (initialized) return true;
-    
-    if (typeof THREE === 'undefined') {
-        logger.error('Three.js not found for Concept Viz.');
-        return false;
-    }
-
-    container = document.getElementById('concept-panel');
-    if (!container) {
-        logger.error('Concept panel not found.');
-        return false;
-    }
-    clock = mainClock;
-    sheafInstance = sheaf;
-
-    const width = container.clientWidth;
-    const height = container.clientHeight;
-
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0a15);
-
-    camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
-    camera.position.set(0, 0, 50);
-
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(width, height);
-    container.appendChild(renderer.domElement);
-
-    labelRenderer = new CSS2DRenderer();
-    labelRenderer.setSize(width, height);
-    labelRenderer.domElement.style.position = 'absolute';
-    labelRenderer.domElement.style.top = '0';
-    container.appendChild(labelRenderer.domElement);
-
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
-    scene.add(ambientLight);
-    const pointLight = new THREE.PointLight(0xffffff, 1, 100);
-    pointLight.position.set(10, 10, 10);
-    scene.add(pointLight);
-
-    buildGraphFromSheaf();
-
-    window.addEventListener('resize', onWindowResize);
-    initialized = true;
-    logger.info('3D Concept Viz initialized with InstancedMesh and legacy node styles.');
-    return true;
-}
-
-function buildGraphFromSheaf() {
-    if (!sheafInstance) return;
-
-    // --- Cleanup previous elements ---
-    if (instancedNodesMesh) scene.remove(instancedNodesMesh);
-    edges.forEach(e => scene.remove(e.line));
-    Object.values(nodes).forEach(n => {
-        if (n.label) scene.remove(n.label);
-    });
-    nodes = {};
-    edges = [];
-    instancedNodesMesh = null;
-    
-    // --- Build Nodes using InstancedMesh with legacy styles ---
-    const nodeCount = sheafInstance.graph.vertices.length;
-    const geometry = new THREE.SphereGeometry(1, 16, 16);
-    // Match legacy node style: fixed color and emissive
-    const material = new THREE.MeshPhongMaterial({ color: 0x4af, emissive: 0x001122 });
-
-    instancedNodesMesh = new THREE.InstancedMesh(geometry, material, nodeCount);
-    scene.add(instancedNodesMesh);
-
-    sheafInstance.graph.vertices.forEach((vertexName, idx) => {
-        const vertexInfo = VERTEX_MAP[vertexName] || { name: vertexName, gameLink: null };
-        const position = new THREE.Vector3(
-            Math.random() * 40 - 20, 
-            Math.random() * 20 - 10, 
-            Math.random() * 40 - 20
-        );
-
-        // Set initial transform for this instance
-        dummy.position.copy(position);
-        dummy.updateMatrix();
-        instancedNodesMesh.setMatrixAt(idx, dummy.matrix);
-
-        // Create label
-        const labelDiv = document.createElement('div');
-        labelDiv.className = 'concept-label';
-        labelDiv.textContent = vertexInfo.name;
-        labelDiv.style.color = '#4af';
-        const label = new CSS2DObject(labelDiv);
-        label.position.copy(position);
-        scene.add(label);
-
-        nodes[vertexName] = { 
-            label, 
-            name: vertexInfo.name, 
-            gameLink: vertexInfo.gameLink,
-            qualia: sheafInstance.stalks.get(vertexName) || vecZeros(sheafInstance.qDim),
-            instanceId: idx,
-            basePosition: position.clone() // Store base position for animation
-        };
-    });
-    
-    // Mark instance data for update
-    instancedNodesMesh.instanceMatrix.needsUpdate = true;
-
-    // --- Build Edges as individual lines (performance is acceptable) ---
-    sheafInstance.graph.edges.forEach(([u, v]) => {
-        const uNode = nodes[u], vNode = nodes[v];
-        if (!uNode || !vNode) return;
-        
-        const p1 = uNode.basePosition;
-        const p2 = vNode.basePosition;
-        const geometry = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-        const material = new THREE.LineBasicMaterial({ color: 0x4af, opacity: 0.5, transparent: true });
-        const line = new THREE.Line(geometry, material);
-        scene.add(line);
-        edges.push({ line, u, v }); // Store line and its vertices
-    });
-
-    createAgentStateNode();
-    createEmergenceCoreNode(sheafInstance);
-}
-
-function createAgentStateNode() {
-    const geometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
-    const material = new THREE.MeshPhongMaterial({ color: 0xffaa00, emissive: 0x112200 });
-    agentStateMesh = new THREE.Mesh(geometry, material);
-    agentStateMesh.position.set(20, 0, 0);
-    scene.add(agentStateMesh);
-
-    const labelDiv = document.createElement('div');
-    labelDiv.className = 'concept-label';
-    labelDiv.textContent = 'Agent State';
-    labelDiv.style.color = '#ffaa00';
-    agentStateLabel = new CSS2DObject(labelDiv);
-    agentStateLabel.position.copy(agentStateMesh.position);
-    scene.add(agentStateLabel);
-}
-
-function createEmergenceCoreNode(sheaf) {
-    const geometry = new THREE.SphereGeometry(2.5, 16, 16);
-    const material = new THREE.MeshPhongMaterial({ color: 0x00ff99, emissive: 0x003322 });
-    emergenceCoreMesh = new THREE.Mesh(geometry, material);
-    emergenceCoreMesh.position.set(-20, 0, 0);
-    emergenceCoreMesh.scale.setScalar(sheaf?.phi || 1);
-    scene.add(emergenceCoreMesh);
-
-    const labelDiv = document.createElement('div');
-    labelDiv.className = 'concept-label';
-    labelDiv.textContent = 'Emergence Core (Φ)';
-    labelDiv.style.color = '#00ff99';
-    emergenceCoreLabel = new CSS2DObject(labelDiv);
-    emergenceCoreLabel.position.copy(emergenceCoreMesh.position);
-    scene.add(emergenceCoreLabel);
-}
-
-export function updateAgentSimulationVisuals(qualiaTensor, gameState, rihScore) {
-    if (!initialized || !sheafInstance) return;
-
-    sheafInstance.graph.vertices.forEach(vertexName => {
-        const node = nodes[vertexName];
-        if (!node) return;
-        const qualia = sheafInstance.stalks.get(vertexName) || node.qualia;
-        node.qualia = qualia; // Update internal qualia state
-
-        const intensity = clamp(norm2(qualia) / Math.sqrt(sheafInstance.qDim), 0, 1);
-        
-        // Match legacy style: update emissive and scale instead of vertex color
-        instancedNodesMesh.material.emissive.setHex(0x000000).lerp(new THREE.Color(0x4af), intensity);
-        const scale = 1 + intensity;
-        dummy.scale.set(scale, scale, scale);
-        dummy.position.copy(node.basePosition);
-        dummy.updateMatrix();
-        instancedNodesMesh.setMatrixAt(node.instanceId, dummy.matrix);
-
-        // Update label text
-        node.label.element.textContent = `${node.name}\n(${intensity.toFixed(2)})`;
-    });
-    
-    // Mark instance matrix buffer for update
-    if (instancedNodesMesh) instancedNodesMesh.instanceMatrix.needsUpdate = true;
-
-    // Update agent state mesh position based on gameState
-    if (agentStateMesh && gameState?.ai) {
-        agentStateMesh.position.lerp(new THREE.Vector3(gameState.ai.x / 10, 0, gameState.ai.z / 10), 0.1);
-        agentStateLabel.position.copy(agentStateMesh.position);
-    }
-
-    // Update emergence core based on dist and rihScore
-    if (emergenceCoreMesh && gameState) {
-        const dist = gameState.dist || 1;
-        const pulse = clamp(1 / (dist + 1e-6), 0.5, 2);
-        emergenceCoreMesh.scale.lerp(new THREE.Vector3(pulse, pulse, pulse), 0.1);
-        emergenceCoreMesh.material.emissive.setHex(0x222233).lerp(new THREE.Color(0xffffff), rihScore || 0);
-        emergenceCoreLabel.position.copy(emergenceCoreMesh.position);
-    }
-
-    // Update edges
-    edges.forEach(({ line, u, v }, idx) => {
-        const uIdx = sheafInstance.graph.vertices.indexOf(u);
-        const vIdx = sheafInstance.graph.vertices.indexOf(v);
-        if (uIdx === -1 || vIdx === -1 || !sheafInstance.adjacencyMatrix) return;
-        
-        const weight = sheafInstance.adjacencyMatrix[uIdx]?.[vIdx] || 0.5;
-        line.material.opacity = clamp(weight, 0.2, 0.8);
-        line.material.color.lerp(new THREE.Color(0x4af), weight);
-    });
-}
-
-export function animateConceptNodes(deltaTime) {
-    if (!initialized || !instancedNodesMesh) return;
-    const time = clock.getElapsedTime();
-
-    sheafInstance.graph.vertices.forEach(vertexName => {
-        const node = nodes[vertexName];
-        if (!node) return;
-        const { instanceId, basePosition } = node;
-        const qualiaNorm = clamp(norm2(node.qualia) / Math.sqrt(sheafInstance.qDim), 0, 1);
-
-        // Calculate new position and scale
-        const yOffset = Math.sin(time * 2 + instanceId) * qualiaNorm * 2.0; // Animate y-position
-        dummy.position.set(basePosition.x, basePosition.y + yOffset, basePosition.z);
-        
-        const scale = 1 + qualiaNorm * 0.5; // Scale based on intensity
-        dummy.scale.set(scale, scale, scale);
-
-        // Update the matrix for this instance
-        dummy.updateMatrix();
-        instancedNodesMesh.setMatrixAt(instanceId, dummy.matrix);
-
-        // Update the label position to follow the animated node
-        node.label.position.copy(dummy.position);
-    });
-
-    // Mark instance matrix buffer for update
-    instancedNodesMesh.instanceMatrix.needsUpdate = true;
-
-    if (emergenceCoreMesh) {
-        emergenceCoreMesh.rotation.y += deltaTime * 0.5;
-        const phiPulse = 1 + Math.sin(time * 3) * 0.1 * clamp(sheafInstance.phi / 5.0, 0, 1);
-        emergenceCoreMesh.scale.setScalar(phiPulse);
-    }
-}
-
-export function renderConceptVisualization() {
-    if (!initialized) return;
-    controls.update();
-    renderer.render(scene, camera);
-    labelRenderer.render(scene, camera);
-}
 
 function onWindowResize() {
     if (!container) return;
@@ -297,6 +47,410 @@ function onWindowResize() {
     camera.updateProjectionMatrix();
     renderer.setSize(width, height);
     labelRenderer.setSize(width, height);
+}
+
+export async function initConceptVisualization(mainClock, sheaf) {
+    if (initialized) {
+        logger.warn('initConceptVisualization: Already initialized.');
+        return true;
+    }
+
+    if (!THREE) {
+        logger.error('initConceptVisualization: Three.js not found.');
+        return false;
+    }
+
+    container = document.getElementById('concept-panel');
+    if (!container) {
+        logger.error('initConceptVisualization: Concept panel not found.');
+        return false;
+    }
+
+    clock = mainClock;
+    sheafInstance = sheaf;
+
+    // Validate or initialize sheaf
+    if (!sheafInstance || !sheafInstance.complex || !Array.isArray(sheafInstance.complex.vertices)) {
+        logger.warn('initConceptVisualization: Invalid sheaf or complex. Initializing default sheaf.');
+        sheafInstance = new FloquetPersistentSheaf({}, { qDim: 7, stateDim: 13 });
+        try {
+            await sheafInstance.initialize();
+        } catch (e) {
+            logger.error('initConceptVisualization: Failed to initialize default sheaf.', e);
+            return false;
+        }
+    }
+
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+
+    // Initialize scene
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0a15);
+
+    // Initialize camera
+    camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
+    camera.position.set(0, 0, 50);
+
+    // Initialize renderer
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(width, height);
+    container.appendChild(renderer.domElement);
+
+    // Initialize label renderer
+    labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(width, height);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.top = '0';
+    container.appendChild(labelRenderer.domElement);
+
+    // Initialize controls
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+
+    // Add lighting
+    const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+    scene.add(ambientLight);
+    const pointLight = new THREE.PointLight(0xffffff, 1, 100);
+    pointLight.position.set(10, 10, 10);
+    scene.add(pointLight);
+
+    // Build graph
+    buildGraphFromSheaf();
+
+    // Initialize Floquet PD group (Th. 17)
+    floquetPDGroup = new THREE.Group();
+    floquetPDGroup.name = 'floquetPDGroup';
+    scene.add(floquetPDGroup);
+
+    // Add resize listener
+    window.addEventListener('resize', onWindowResize);
+    initialized = true;
+    logger.info('3D Concept Viz initialized with Floquet-enhanced InstancedMesh and PD visualization.');
+    return true;
+}
+
+function buildGraphFromSheaf() {
+    if (!sheafInstance || !sheafInstance.complex || !Array.isArray(sheafInstance.complex.vertices)) {
+        logger.error('buildGraphFromSheaf: Invalid sheaf or complex. Returning empty graph.');
+        return;
+    }
+
+    // Clear existing graph elements
+    edges.forEach(e => {
+        scene.remove(e.line);
+        e.line.geometry.dispose();
+        e.line.material.dispose();
+    });
+    edges = [];
+    Object.values(nodes).forEach(n => {
+        if (n.label) scene.remove(n.label);
+    });
+    nodes = {};
+
+    if (instancedNodesMesh) {
+        scene.remove(instancedNodesMesh);
+        instancedNodesMesh.geometry.dispose();
+        instancedNodesMesh.material.dispose();
+        instancedNodesMesh = null;
+    }
+
+    // Create instanced mesh for nodes
+    const numVertices = sheafInstance.complex.vertices.length;
+    const geometry = new THREE.SphereGeometry(0.5, 16, 16);
+    const material = new THREE.MeshPhongMaterial({
+        color: 0x4af, // Legacy blue
+        emissive: 0x001122
+    });
+    instancedNodesMesh = new THREE.InstancedMesh(geometry, material, numVertices);
+    scene.add(instancedNodesMesh);
+
+    // Position nodes in a circle
+    const basePositions = [];
+    const radius = 5;
+    sheafInstance.complex.vertices.forEach((vertexName, i) => {
+        const angle = (i / numVertices) * 2 * Math.PI;
+        const basePosition = new THREE.Vector3(
+            Math.cos(angle) * radius,
+            0,
+            Math.sin(angle) * radius
+        );
+        basePositions.push(basePosition);
+
+        // Create label
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'concept-label';
+        labelDiv.textContent = VERTEX_MAP[vertexName]?.name || vertexName;
+        labelDiv.style.background = 'rgba(0, 0, 0, 0.7)';
+        labelDiv.style.color = 'white';
+        labelDiv.style.padding = '2px 4px';
+        const label = new CSS2DObject(labelDiv);
+        label.position.copy(basePosition);
+        scene.add(label);
+
+        nodes[vertexName] = {
+            label,
+            name: vertexName,
+            qualia: sheafInstance.stalks?.get(vertexName)?.state || vecZeros(sheafInstance.qDim || 7),
+            instanceId: i,
+            basePosition,
+            gameLink: VERTEX_MAP[vertexName]?.gameLink || null
+        };
+    });
+
+    // Build edges
+    sheafInstance.complex.edges.forEach(([u, v, weight]) => {
+        const uIdx = sheafInstance.complex.vertices.indexOf(u);
+        const vIdx = sheafInstance.complex.vertices.indexOf(v);
+        if (uIdx === -1 || vIdx === -1) {
+            logger.warn(`buildGraphFromSheaf: Invalid edge vertices (${u}, ${v}). Skipping.`);
+            return;
+        }
+
+        const points = [basePositions[uIdx], basePositions[vIdx]];
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const material = new THREE.LineBasicMaterial({
+            color: 0x4af,
+            transparent: true,
+            opacity: clamp(weight || 0.5, 0.2, 0.8)
+        });
+        const line = new THREE.Line(geometry, material);
+        scene.add(line);
+
+        edges.push({ line, u, v });
+    });
+
+    // Emergence core (Th. 3: Free-energy visualization)
+    const coreGeometry = new THREE.SphereGeometry(1, 16, 16);
+    const coreMaterial = new THREE.MeshPhongMaterial({ color: 0xff44aa, emissive: 0x220011 });
+    emergenceCoreMesh = new THREE.Mesh(coreGeometry, coreMaterial);
+    emergenceCoreMesh.position.set(0, 0, -10);
+    scene.add(emergenceCoreMesh);
+
+    const coreLabelDiv = document.createElement('div');
+    coreLabelDiv.className = 'concept-label';
+    coreLabelDiv.textContent = 'Emergence Core (Φ)';
+    coreLabelDiv.style.background = 'rgba(255, 68, 170, 0.8)';
+    coreLabelDiv.style.color = 'white';
+    emergenceCoreLabel = new CSS2DObject(coreLabelDiv);
+    emergenceCoreLabel.position.copy(emergenceCoreMesh.position);
+    scene.add(emergenceCoreLabel);
+
+    // Agent state mesh (game linkage)
+    const agentGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+    const agentMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
+    agentStateMesh = new THREE.Mesh(agentGeometry, agentMaterial);
+    agentStateMesh.position.set(-5, 0, 0);
+    scene.add(agentStateMesh);
+
+    const agentLabelDiv = document.createElement('div');
+    agentLabelDiv.className = 'concept-label';
+    agentLabelDiv.textContent = 'Agent State';
+    agentStateLabel = new CSS2DObject(agentLabelDiv);
+    agentStateLabel.position.copy(agentStateMesh.position);
+    scene.add(agentStateLabel);
+
+    logger.info(`buildGraphFromSheaf: Graph built: ${numVertices} vertices, ${sheafInstance.complex.edges.length} edges.`);
+}
+
+export function updateAgentSimulationVisuals(agent, canvas, ctx) {
+    if (!(canvas instanceof HTMLCanvasElement)) {
+        logger.error('updateAgentSimulationVisuals: Invalid canvas element.', { canvas });
+        return;
+    }
+
+    if (!(ctx instanceof CanvasRenderingContext2D)) {
+        try {
+            ctx = canvas.getContext('2d');
+            if (!ctx) {
+                logger.error('updateAgentSimulationVisuals: Failed to get 2D context from canvas.');
+                return;
+            }
+        } catch (e) {
+            logger.error('updateAgentSimulationVisuals: Error getting canvas context:', e);
+            return;
+        }
+    }
+
+    if (!agent || !agent.ai || !agent.player) {
+        logger.warn('updateAgentSimulationVisuals: Invalid agent state, using default.', { agent });
+        agent = {
+            ai: { x: 0, z: 0, rot: 0 },
+            player: { x: 0, z: 0, rot: 0 }
+        };
+    }
+
+    try {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    } catch (e) {
+        logger.error('updateAgentSimulationVisuals: Error clearing canvas:', e);
+        return;
+    }
+
+    const scaleX = canvas.width / 100;
+    const scaleY = canvas.height / 100;
+    const offsetX = canvas.width / 2;
+    const offsetY = canvas.height / 2;
+
+    try {
+        ctx.save();
+        ctx.translate(agent.ai.x * scaleX + offsetX, agent.ai.z * scaleY + offsetY);
+        ctx.rotate(agent.ai.rot);
+        ctx.beginPath();
+        ctx.arc(0, 0, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = 'blue';
+        ctx.fill();
+        ctx.closePath();
+        ctx.restore();
+    } catch (e) {
+        logger.error('updateAgentSimulationVisuals: Error rendering AI:', e);
+    }
+
+    try {
+        ctx.save();
+        ctx.translate(agent.player.x * scaleX + offsetX, agent.player.z * scaleY + offsetY);
+        ctx.rotate(agent.player.rot);
+        ctx.beginPath();
+        ctx.arc(0, 0, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = 'red';
+        ctx.fill();
+        ctx.closePath();
+        ctx.restore();
+    } catch (e) {
+        logger.error('updateAgentSimulationVisuals: Error rendering player:', e);
+    }
+
+    if (agent.dist) {
+        ctx.font = '12px Arial';
+        ctx.fillStyle = 'black';
+        ctx.fillText(`Dist: ${agent.dist.toFixed(2)}`, 10, 20);
+    }
+}
+
+export function updateEdgeWeights() {
+    if (!edges.length || !sheafInstance.adjacency) {
+        logger.warn('updateEdgeWeights: No edges or adjacency data available.');
+        return;
+    }
+
+    edges.forEach(({ line, u, v }) => {
+        const uIdx = sheafInstance.complex.vertices.indexOf(u);
+        const vIdx = sheafInstance.complex.vertices.indexOf(v);
+        if (uIdx === -1 || vIdx === -1) {
+            logger.warn(`updateEdgeWeights: Invalid edge vertices (${u}, ${v}). Skipping.`);
+            return;
+        }
+
+        const weight = sheafInstance.adjacency.get(u)?.has(v) ? 0.8 : 0.5;
+        line.material.opacity = clamp(weight, 0.2, 0.8);
+        line.material.color.lerp(new THREE.Color(0x4af), weight);
+    });
+}
+
+export function animateConceptNodes(deltaTime) {
+    if (!initialized || !instancedNodesMesh) {
+        logger.warn('animateConceptNodes: Visualization not initialized or instancedNodesMesh missing.');
+        return;
+    }
+
+    const time = clock.getElapsedTime();
+
+    sheafInstance.complex.vertices.forEach(vertexName => {
+        const node = nodes[vertexName];
+        if (!node) return;
+        const { instanceId, basePosition } = node;
+        const qualiaNorm = clamp(norm2(node.qualia) / Math.sqrt(sheafInstance.qDim || 7), 0, 1);
+        const coherence = sheafInstance.coherence || 0; // Th. 1: Coherence modulation
+
+        // Th. 2 & 17: Animate with Floquet phase
+        const phase = sheafInstance.floquetPD?.phases[0] || 0;
+        const yOffset = Math.sin(time * 2 + instanceId) * qualiaNorm * 2.0 * coherence;
+        dummy.position.set(basePosition.x, basePosition.y + yOffset, basePosition.z);
+
+        const scale = 1 + qualiaNorm * 0.5 * Math.cos(phase * time); // Rhythmic scaling
+        dummy.scale.set(scale, scale, scale);
+
+        dummy.updateMatrix();
+        instancedNodesMesh.setMatrixAt(instanceId, dummy.matrix);
+
+        node.label.position.copy(dummy.position);
+    });
+
+    instancedNodesMesh.instanceMatrix.needsUpdate = true;
+
+    if (emergenceCoreMesh) {
+        emergenceCoreMesh.rotation.y += deltaTime * 0.5;
+        const phiPulse = 1 + Math.sin(time * 3) * 0.1 * clamp(sheafInstance.phi / 5.0, 0, 1);
+        emergenceCoreMesh.scale.setScalar(phiPulse * sheafInstance.coherence); // Th. 1: Coherence pulse
+    }
+}
+
+export function renderConceptVisualization() {
+    if (!initialized) {
+        logger.warn('renderConceptVisualization: Visualization not initialized.');
+        return;
+    }
+
+    controls.update();
+    renderer.render(scene, camera);
+    labelRenderer.render(scene, camera);
+
+    // Th. 17: Render Floquet PD every 30 frames
+    if (Math.floor(clock.getElapsedTime() * 60) % 30 === 0) {
+        visualizeFloquetPD(scene, camera, renderer);
+    }
+}
+
+// Th. 17: Floquet PD Visualization
+export function visualizeFloquetPD(scene, camera, renderer) {
+    if (!initialized || !sheafInstance) {
+        logger.warn('visualizeFloquetPD: Visualization not initialized or sheaf missing.');
+        return null;
+    }
+
+    if (!THREE) {
+        logger.error('visualizeFloquetPD: THREE.js is not available.');
+        return null;
+    }
+
+    // Clear existing PD group
+    const existingPD = scene.getObjectByName('floquetPDGroup');
+    if (existingPD) scene.remove(existingPD);
+
+    const pdGroup = new THREE.Group();
+    pdGroup.name = 'floquetPDGroup';
+    const geometry = new THREE.SphereGeometry(0.1, 8, 8);
+
+    if (!sheafInstance.floquetPD || !Array.isArray(sheafInstance.floquetPD.births)) {
+        logger.warn('visualizeFloquetPD: Invalid or missing floquetPD data. Skipping.');
+        return null;
+    }
+
+    sheafInstance.floquetPD.births.forEach((birth, i) => {
+        const death = sheafInstance.floquetPD.deaths[i] || { time: birth.time + (sheafInstance.delta || 0.1), phase: birth.phase };
+        const lifetime = death.time - birth.time;
+        if (lifetime < (sheafInstance.delta || 0.1)) return;
+
+        const material = new THREE.MeshPhongMaterial({
+            color: new THREE.Color(
+                0.5 + 0.5 * Math.cos(birth.phase),
+                0.5 + 0.5 * Math.sin(birth.phase),
+                0.5
+            ),
+            emissive: new THREE.Color(0.1, 0.1, 0.2)
+        });
+        const sphere = new THREE.Mesh(geometry, material);
+        sphere.position.set(
+            birth.time * 0.1,
+            lifetime * 0.1,
+            birth.phase / (2 * Math.PI)
+        );
+        pdGroup.add(sphere);
+    });
+
+    scene.add(pdGroup);
+    return pdGroup;
 }
 
 export function cleanupConceptVisualization() {
@@ -327,21 +481,27 @@ export function cleanupConceptVisualization() {
         emergenceCoreMesh.geometry.dispose();
         emergenceCoreMesh.material.dispose();
     }
+    if (floquetPDGroup) {
+        scene.remove(floquetPDGroup);
+    }
     if (agentStateLabel) scene.remove(agentStateLabel);
     if (emergenceCoreLabel) scene.remove(emergenceCoreLabel);
 
     renderer.dispose();
     if (container) container.innerHTML = '';
     if (controls) controls.dispose();
-    
+
     initialized = false;
     sheafInstance = null;
     instancedNodesMesh = null;
     nodes = {};
     edges = [];
-    logger.info('3D Concept Viz cleaned up.');
+    logger.info('3D Concept Viz cleaned up with Floquet PD disposal.');
 }
 
 export { initialized as conceptInitialized };
-export function isConceptVisualizationReady() { return initialized; }
+export function isConceptVisualizationReady() {
+    return initialized;
+}
+
 // --- END OF FILE viz-concepts.js ---
