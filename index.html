@@ -478,26 +478,51 @@
             flex-direction: column;
             flex-grow: 1;
         }
-        #nn-visualization-container, #nn-visualization-container-opponent {
-            position: relative;
-            flex-grow: 1;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0 15px;
-            min-height: 80px;
-        }
-        .nn-layer {
-            display: flex;
-            flex-direction: column;
-            justify-content: space-around;
-            height: 100%;
-            align-items: center;
-            gap: 5px;
-            z-index: 10;
-            position: relative;
-            min-height: 60px;
-        }
+       /* In index.html, inside the <style> tag */
+
+/* DELETE the existing rules for:
+   #nn-visualization-container-main, #nn-visualization-container-opponent
+   .nn-layers-wrapper
+   .nn-layer
+   .nn-connections-canvas
+*/
+
+/* REPLACE them with this complete, corrected block */
+
+.nn-visualizer-panel .nn-visualization-container {
+    position: relative; /* This is the anchor for all absolutely positioned children */
+    flex-grow: 1;
+    min-height: 80px;
+}
+
+.nn-connections-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 5; /* In the background */
+    opacity: 0.7;
+}
+
+.nn-layers-wrapper {
+    position: relative; /* Let it sit in the normal document flow */
+    z-index: 10; /* On top of the canvas */
+    height: 100%;
+    display: flex;
+    justify-content: space-around; /* Distribute layers evenly */
+    align-items: center;
+    padding: 0 15px; /* Add some padding */
+}
+
+.nn-layer {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-around;
+    align-items: center;
+    height: 100%;
+    gap: 5px;
+}
         .nn-neuron {
             width: 8px;
             height: 8px;
@@ -518,15 +543,15 @@
             to { transform: scale(1.2); opacity: 0.8; }
         }
         .nn-connections-canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 5;
-            opacity: 0.7;
-        }
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 5; /* Behind the layers */
+    opacity: 0.7;
+}
         .neuron-flash {
             animation: neuron-flash-anim 0.8s ease-out forwards;
         }
@@ -819,16 +844,20 @@
                 <div class="panel nn-visualizer-panel" role="region" aria-labelledby="main-ai-brain-heading">
                     <h3 id="main-ai-brain-heading">🧠 Main AI OWM</h3>
                     <p>Sheaf-DIT consciousness metrics are displayed in the metrics panel.</p>
-                    <div id="nn-visualization-container"></div>
+                    <!-- CRITICAL FIX: Replace the div with the required canvas element -->
+<div id="mainBrainCanvas" class="nn-visualization-container">
+                    </div>
                     <div class="loading-overlay" id="mainBrainLoadingOverlay" aria-live="assertive" aria-busy="true" aria-label="Loading main AI brain">
                         <div class="loading-spinner"></div>
                         <div class="loading-text" id="mainBrainLoadingText">Initializing main AI model...</div>
                     </div>
                 </div>
-                <div class="panel nn-visualizer-panel" role="region" aria-labelledby="opponent-brain-heading">
+<div class="panel nn-visualizer-panel" role="region" aria-labelledby="opponent-brain-heading">
                     <h3 id="opponent-brain-heading">🤖 Opponent AI OWM</h3>
                     <p>This AI learns independently using its own ontological world model.</p>
-                    <div id="nn-visualization-container-opponent"></div>
+                    <!-- CRITICAL FIX: Replace the div with the required canvas element -->
+<div id="opponentBrainCanvas" class="nn-visualization-container">
+                    </div>
                     <div class="loading-overlay" id="opponentBrainLoadingOverlay" aria-live="assertive" aria-busy="true" aria-label="Loading opponent AI brain">
                         <div class="loading-spinner"></div>
                         <div class="loading-text" id="opponentBrainLoadingText">Initializing opponent model...</div>
@@ -887,7 +916,9 @@
     }
     </script>
     <!-- Global Libraries -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.js"></script>
+<!-- REMOVE your old TensorFlow.js script tag -->
+<!-- ADD this one, preferably in the <head> of your HTML -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
     <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
