@@ -11,13 +11,18 @@ export class NeuralNetworkVisualizer {
      * @param {'main'|'opponent'} theme - The visual theme ('main' for blue, 'opponent' for orange).
      */
     constructor(containerId, worldModel, theme = 'main') {
+        // The constructor now takes the containerId as a string
         this.container = document.getElementById(containerId);
         this.worldModel = worldModel;
         this.theme = theme;
 
-        if (!this.container || !this.worldModel) {
-            logger.error(`NNVisualizer: Container '${containerId}' or worldModel not found.`);
-            return;
+        if (!this.container) {
+            logger.error(`NNVisualizer: Container with ID '${containerId}' not found in the DOM.`);
+            return; // Exit if the container element doesn't exist.
+        }
+        if (!this.worldModel) {
+            logger.error(`NNVisualizer: A valid worldModel was not provided.`);
+            return; // Exit if the world model is missing.
         }
 
         this.neuronElements = [];
@@ -37,13 +42,22 @@ export class NeuralNetworkVisualizer {
         this.visualLayers.push({ name: 'qValues', actualCount: model.actionDim }); 
     }
 
+    // In nn-visualizer.js
+
     _setupDOM() {
         this.container.innerHTML = '';
 
+        // The canvas is for connections and will be in the background
         this.canvas = document.createElement('canvas');
         this.canvas.className = 'nn-connections-canvas';
         this.ctx = this.canvas.getContext('2d');
         this.container.appendChild(this.canvas);
+
+        // --- START OF FIX ---
+        // Create a dedicated wrapper for the visual neuron layers
+        const layersWrapper = document.createElement('div');
+        layersWrapper.className = 'nn-layers-wrapper';
+        // --- END OF FIX ---
 
         this.visualLayers.forEach((layer, lIndex) => {
             const lDiv = document.createElement('div');
@@ -57,8 +71,12 @@ export class NeuralNetworkVisualizer {
                 lDiv.appendChild(nDiv);
                 this.neuronElements[lIndex].push(nDiv);
             }
-            this.container.appendChild(lDiv);
+            // --- MODIFIED: Append layers to the wrapper, not the main container ---
+            layersWrapper.appendChild(lDiv);
         });
+
+        // Append the fully constructed wrapper to the main container
+        this.container.appendChild(layersWrapper);
 
         const ro = new ResizeObserver(() => {
             const dpr = window.devicePixelRatio || 1;
@@ -71,24 +89,23 @@ export class NeuralNetworkVisualizer {
     }
     
     _getNeuronPosition(lIndex, nIndex) {
+        // Find the wrapper element created in _setupDOM
+        const wrapper = this.container.querySelector('.nn-layers-wrapper');
         const el = this.neuronElements[lIndex]?.[nIndex];
-        if (!el) {
-            const layerDiv = this.container.children[lIndex + 1];
-            if (!layerDiv) return { x: 0, y: 0 };
-            const layerRect = layerDiv.getBoundingClientRect();
-            const containerRect = this.container.getBoundingClientRect();
-            return {
-                x: (layerRect.left - containerRect.left) + layerRect.width / 2,
-                y: (layerRect.top - containerRect.top) + layerRect.height / 2
-            };
+
+        if (!el || !wrapper) {
+            return { x: 0, y: 0 };
         }
 
-        const r = el.getBoundingClientRect();
-        const cr = this.container.getBoundingClientRect();
+        // Get the position of the neuron and the wrapper relative to the viewport
+        const neuronRect = el.getBoundingClientRect();
+        const wrapperRect = wrapper.getBoundingClientRect();
 
+        // Calculate the neuron's center relative to the top-left of the wrapper
+        // This is the correct coordinate system for the canvas.
         return {
-            x: r.left - cr.left + r.width / 2,
-            y: r.top - cr.top + r.height / 2
+            x: (neuronRect.left - wrapperRect.left) + neuronRect.width / 2,
+            y: (neuronRect.top - wrapperRect.top) + neuronRect.height / 2
         };
     }
 
