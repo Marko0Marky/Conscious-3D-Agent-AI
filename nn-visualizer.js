@@ -1,6 +1,5 @@
 // --- START OF FILE nn-visualizer.js ---
-import { clamp, isFiniteVector, logger } from './utils.js';
-
+import { clamp, isFiniteVector, logger, unflattenMatrix, isFiniteMatrix } from './utils.js';
 /**
  * Visualizes the neural network structure and activity.
  */
@@ -48,35 +47,36 @@ export class NeuralNetworkVisualizer {
         this.container.innerHTML = '';
 
         // The canvas is for connections and will be in the background
-        this.canvas = document.createElement('canvas');
-        this.canvas.className = 'nn-connections-canvas';
-        this.ctx = this.canvas.getContext('2d');
-        this.container.appendChild(this.canvas);
+            // Create a common parent wrapper for both the canvas and the neuron layers
+    const visualWrapper = document.createElement('div');
+    visualWrapper.className = 'nn-visual-wrapper';
+    this.container.appendChild(visualWrapper);
 
-        // --- START OF FIX ---
-        // Create a dedicated wrapper for the visual neuron layers
-        const layersWrapper = document.createElement('div');
-        layersWrapper.className = 'nn-layers-wrapper';
-        // --- END OF FIX ---
+    // The canvas for connections, positioned absolutely within the visualWrapper
+    this.canvas = document.createElement('canvas');
+    this.canvas.className = 'nn-connections-canvas';
+    this.ctx = this.canvas.getContext('2d');
+    visualWrapper.appendChild(this.canvas); // Canvas is now child of visualWrapper
 
-        this.visualLayers.forEach((layer, lIndex) => {
-            const lDiv = document.createElement('div');
-            lDiv.className = 'nn-layer';
-            this.neuronElements[lIndex] = [];
+    // Create a dedicated wrapper for the neuron layers, positioned absolutely within the visualWrapper
+    const layersWrapper = document.createElement('div');
+    layersWrapper.className = 'nn-layers-wrapper';
+    visualWrapper.appendChild(layersWrapper); // Neuron layers are also child of visualWrapper
 
-            const neuronsToDisplay = Math.min(layer.actualCount, this.MAX_NEURONS_TO_DISPLAY);
-            for (let i = 0; i < neuronsToDisplay; i++) {
-                const nDiv = document.createElement('div');
-                nDiv.className = 'nn-neuron';
-                lDiv.appendChild(nDiv);
-                this.neuronElements[lIndex].push(nDiv);
-            }
-            // --- MODIFIED: Append layers to the wrapper, not the main container ---
-            layersWrapper.appendChild(lDiv);
-        });
+    this.visualLayers.forEach((layer, lIndex) => {
+        const lDiv = document.createElement('div');
+        lDiv.className = 'nn-layer';
+        this.neuronElements[lIndex] = [];
 
-        // Append the fully constructed wrapper to the main container
-        this.container.appendChild(layersWrapper);
+        const neuronsToDisplay = Math.min(layer.actualCount, this.MAX_NEURONS_TO_DISPLAY);
+        for (let i = 0; i < neuronsToDisplay; i++) {
+            const nDiv = document.createElement('div');
+            nDiv.className = 'nn-neuron';
+            lDiv.appendChild(nDiv);
+            this.neuronElements[lIndex].push(nDiv);
+        }
+        layersWrapper.appendChild(lDiv);
+    });
 
         const ro = new ResizeObserver(() => {
             const dpr = window.devicePixelRatio || 1;
@@ -89,25 +89,22 @@ export class NeuralNetworkVisualizer {
     }
     
     _getNeuronPosition(lIndex, nIndex) {
-        // Find the wrapper element created in _setupDOM
-        const wrapper = this.container.querySelector('.nn-layers-wrapper');
-        const el = this.neuronElements[lIndex]?.[nIndex];
-
-        if (!el || !wrapper) {
-            return { x: 0, y: 0 };
-        }
-
-        // Get the position of the neuron and the wrapper relative to the viewport
-        const neuronRect = el.getBoundingClientRect();
-        const wrapperRect = wrapper.getBoundingClientRect();
-
-        // Calculate the neuron's center relative to the top-left of the wrapper
-        // This is the correct coordinate system for the canvas.
-        return {
-            x: (neuronRect.left - wrapperRect.left) + neuronRect.width / 2,
-            y: (neuronRect.top - wrapperRect.top) + neuronRect.height / 2
-        };
+    const el = this.neuronElements[lIndex]?.[nIndex];
+    if (!el || !this.canvas) {
+        return { x: 0, y: 0 };
     }
+
+    // Get the position of the neuron and the canvas relative to the viewport
+    const neuronRect = el.getBoundingClientRect();
+    const canvasRect = this.canvas.getBoundingClientRect();
+
+    // Calculate the neuron's center relative to the top-left of the canvas
+    // This ensures connections are drawn in the correct canvas coordinates.
+    return {
+        x: (neuronRect.left - canvasRect.left) + neuronRect.width / 2,
+        y: (neuronRect.top - canvasRect.top) + neuronRect.height / 2
+    };
+}
 
     _drawConnections() {
         if (!this.ctx || !this.worldModel || this.neuronElements.length < 4) return;
@@ -118,10 +115,15 @@ export class NeuralNetworkVisualizer {
         const hiddenStateNeurons = this.neuronElements[2];
         const qValuesNeurons = this.neuronElements[3];
 
-        if (hiddenStateNeurons && qValuesNeurons && model.qValueHead && model.qValueHead.W) {
-            const weights_h_to_q = model.qValueHead.W;
-            const maxWeightAbs_h_to_q = 1.0;
+        // Connection from Hidden State (LSTM output) to Action Logits (Actor Head)
+if (hiddenStateNeurons && qValuesNeurons && model.actorHead && model.actorHead.W) { // Corrected: use model.actorHead.W
+    const weights_h_to_q = unflattenMatrix(model.actorHead.W); // Robustly unflatten the matrix
+    const maxWeightAbs_h_to_q = 1.0; // Assuming weights are somewhat normalized around 1
 
+    if (!weights_h_to_q || !isFiniteMatrix(weights_h_to_q)) {
+        logger.warn('NNViz: ActorHead weights are invalid or non-finite. Skipping connections.');
+        return;
+    }
             for (let i = 0; i < hiddenStateNeurons.length; i++) {
                 const fromPos = this._getNeuronPosition(2, i);
                 const hiddenStateDataIndex = Math.floor(i * (model.hiddenState.length / hiddenStateNeurons.length));
@@ -154,9 +156,17 @@ export class NeuralNetworkVisualizer {
         const inputNeurons = this.neuronElements[0];
         const cellStateNeurons = this.neuronElements[1];
 
-        if (inputNeurons && cellStateNeurons && model.Wc) {
-            const weights_input_to_c_tilde_candidate = model.Wc;
-            const maxWeightAbs_input_to_c = 0.5;
+        // Connection from Input Layer to Cell State (part of LSTM gates, specifically candidate cell state and input gate)
+if (inputNeurons && cellStateNeurons && model.Wc && model.Wi) { // Use model.Wc and model.Wi
+    const weights_input_to_c_candidate_part = unflattenMatrix(model.Wc); // Unflatten
+    const weights_input_to_i_gate_part = unflattenMatrix(model.Wi); // Unflatten (input gate)
+    const maxWeightAbs_input_to_c = 0.5;
+
+    if (!weights_input_to_c_candidate_part || !isFiniteMatrix(weights_input_to_c_candidate_part) ||
+        !weights_input_to_i_gate_part || !isFiniteMatrix(weights_input_to_i_gate_part)) {
+        logger.warn('NNViz: LSTM gate weights are invalid or non-finite. Skipping input connections.');
+        return;
+    }
 
             const inputFeatureCount = model.inputDim;
 
@@ -168,8 +178,14 @@ export class NeuralNetworkVisualizer {
                     const toPos = this._getNeuronPosition(1, j);
                     const cellStateDataIndex = Math.floor(j * (model.recurrentStateSize / cellStateNeurons.length));
 
-                    const weight = weights_input_to_c_tilde_candidate[cellStateDataIndex]?.[inputDataIndex] || 0;
-                    const absWeight = Math.abs(weight);
+                    // Combine influence from Wc (candidate cell state) and Wi (input gate) for visualization
+// The input for LSTM gates is [input_vector, previous_hidden_state].
+// We need to map inputDataIndex to the correct column in the flattened Wc/Wi matrix.
+const inputStartCol = 0; // Assuming input vector is at the beginning of combined input
+const weight_c = weights_input_to_c_candidate_part[cellStateDataIndex]?.[inputStartCol + inputDataIndex] || 0;
+const weight_i = weights_input_to_i_gate_part[cellStateDataIndex]?.[inputStartCol + inputDataIndex] || 0;
+const combined_weight = (weight_c + weight_i) / 2; // Simple average for visualization
+const absWeight = Math.abs(combined_weight);
                     const strength = clamp(absWeight / maxWeightAbs_input_to_c, 0, 1);
 
                     this.ctx.beginPath();
@@ -191,10 +207,11 @@ export class NeuralNetworkVisualizer {
     }
 
 
-    update(activations, chosenActionIndex = -1) {
-        this.lastChosenActionIndex = chosenActionIndex;
+update(allLayerActivations, chosenActionIndex = -1) { // Renamed parameter for clarity        this.lastChosenActionIndex = chosenActionIndex;
 
-        if (!activations || activations.length === 0 || !activations.every(isFiniteVector)) {
+        // Ensure allLayerActivations is an array of arrays, and each inner array is a finite vector
+if (!allLayerActivations || !Array.isArray(allLayerActivations) || allLayerActivations.length !== this.visualLayers.length || !allLayerActivations.every(isFiniteVector)) {
+    logger.warn(`NNVisualizer: Invalid or incomplete layer activations provided. Defaulting to inactive visualization.`);
             this.visualLayers.forEach((layerViz, l_idx) => {
                 (this.neuronElements[l_idx] || []).forEach(el => {
                     if (el) {
@@ -212,8 +229,12 @@ export class NeuralNetworkVisualizer {
         const hues = this.theme === 'opponent' ? { pos: 39, neg: 271 } : { pos: 195, neg: 0 };
 
         this.visualLayers.forEach((layerViz, l_idx) => {
-            const layerActivations = activations[l_idx];
-            if (!layerActivations || !isFiniteVector(layerActivations)) {
+          const layerActivations = allLayerActivations[l_idx]; // Correctly access the array for this layer
+               if (!isFiniteVector(layerActivations)) {
+         logger.warn(`NNVisualizer: Layer ${l_idx} activations are non-finite after initial validation.`);
+         return;
+    }
+          if (!layerActivations || !isFiniteVector(layerActivations)) {
                 logger.warn(`NNVisualizer: Layer ${l_idx} activations are invalid.`);
                 return;
             }
