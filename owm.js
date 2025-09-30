@@ -1,32 +1,42 @@
-// --- START OF FILE owm.js ---
+// ===================================================================================
+// --- OWM.JS (STABILITY-ENHANCED & COMPLETE - V5) ---
+// A comprehensive Ontological World Model combining a Floquet Persistent Sheaf with an LSTM-based RNN.
+// Integrates V4's functionality with fixes for isFiniteNumber errors and enhanced robustness for sheaf interactions.
+// Fixes vector mismatch errors, ensures numerical stability, and supports dynamic sheaf topology changes.
+// ===================================================================================
 
 import {
     clamp, dot, norm2, vecAdd, vecSub, vecScale, tanhVec, sigmoidVec, vecMul,
     randomMatrix, vecZeros, zeroMatrix, isFiniteVector, isFiniteMatrix, flattenMatrix,
-    logger, runWorkerTask, softmax
+    logger, runWorkerTask, softmax, sigmoid
 } from './utils.js';
 import { FloquetPersistentSheaf } from './qualia-sheaf.js';
-
+import { matVecMul } from './utils.js';
 const Numeric = window.Numeric || null;
 const GPU = window.gpu || null;
 
 /**
- * Represents an Ontological World Model (OWM) for an AI, combining a Floquet Persistent Sheaf with an LSTM-based
- * Recurrent Neural Network. It predicts future states probabilistically and evaluates actions using an Actor-Critic
- * architecture with dynamic adaptation to sheaf topology changes.
+ * Local utility to check if a number is finite.
+ */
+const isFiniteNumber = (x) => typeof x === 'number' && Number.isFinite(x);
+
+/**
+ * Ontological World Model (OWM) for an AI, combining a Floquet Persistent Sheaf with an LSTM-based
+ * Recurrent Neural Network. It predicts future states probabilistically and evaluates actions using
+ * an Actor-Critic architecture with dynamic adaptation to sheaf topology changes.
  */
 export class OntologicalWorldModel {
     constructor(stateDim = 13, actionDim = 4, qDim = 7, hiddenSizes = [64, 64], isPlayerTwo = false, qualiaSheafInstance = null) {
-        this.stateDim = stateDim;
-        this.actionDim = actionDim;
-        this.isPlayerTwo = isPlayerTwo;
-        this.recurrentStateSize = hiddenSizes[hiddenSizes.length - 1];
-
         if (!qualiaSheafInstance || !qualiaSheafInstance.complex || !Array.isArray(qualiaSheafInstance.complex.vertices)) {
             console.error('CRITICAL ERROR: OntologicalWorldModel requires a pre-initialized FloquetPersistentSheaf with valid complex.vertices.');
             logger.error('CRITICAL ERROR: OntologicalWorldModel requires a pre-initialized FloquetPersistentSheaf with valid complex.vertices.');
             throw new Error('OntologicalWorldModel must be initialized with a valid FloquetPersistentSheaf instance.');
         }
+        this.stateDim = stateDim;
+        this.actionDim = actionDim;
+        this.qDim = qDim;
+        this.isPlayerTwo = isPlayerTwo;
+        this.recurrentStateSize = hiddenSizes[hiddenSizes.length - 1];
         this.qualiaSheaf = qualiaSheafInstance;
 
         this._initializeNetwork();
@@ -36,21 +46,25 @@ export class OntologicalWorldModel {
         this.ready = false;
         this.lastActivations = [];
         this.lastActionLogProbs = vecZeros(this.actionDim);
-        this.lastStateValue = 0;
         this.lastChosenActionLogProb = 0;
+        this.lastStateValue = 0;
         this.actorLoss = 0;
         this.criticLoss = 0;
         this.predictionLoss = 0;
+        this.coherencePrior = vecZeros(this.recurrentStateSize); 
 
-        logger.info(`OWM constructed (${isPlayerTwo ? 'AI' : 'Player'}): stateDim=${this.stateDim}, inputDim=${this.inputDim}, qualiaSheaf.qDim=${this.qualiaSheaf.qDim}, expectedQualiaInputLength=${this.expectedQualiaInputLength}`);
+        logger.info(`OWM constructed (${isPlayerTwo ? 'AI' : 'Player'}): stateDim=${this.stateDim}, inputDim=${this.inputDim}, qualiaSheaf.qDim=${this.qDim}, expectedQualiaInputLength=${this.expectedQualiaInputLength}`);
     }
 
     /**
      * Initializes network weights and dimensions, allowing reinitialization if the sheaf's topology changes.
      */
     _initializeNetwork() {
+        if (!this.qualiaSheaf || !this.qualiaSheaf.complex || !Array.isArray(this.qualiaSheaf.complex.vertices)) {
+            throw new Error('OWM _initializeNetwork: Sheaf not ready.');
+        }
         this.qDim = this.qualiaSheaf.qDim;
-        const nVertices = this.qualiaSheaf.complex.vertices.length;
+        const nVertices = Math.max(1, this.qualiaSheaf.complex.vertices.length);
         this.expectedQualiaInputLength = nVertices * this.qDim;
         this.inputDim = this.stateDim + this.expectedQualiaInputLength;
 
@@ -60,57 +74,120 @@ export class OntologicalWorldModel {
         const combinedInputSize = this.inputDim + this.recurrentStateSize;
         const weightScale = Math.sqrt(2.0 / combinedInputSize);
 
-        this.Wf = randomMatrix(this.recurrentStateSize, combinedInputSize, weightScale);
-        this.Wi = randomMatrix(this.recurrentStateSize, combinedInputSize, weightScale);
-        this.Wc = randomMatrix(this.recurrentStateSize, combinedInputSize, weightScale);
-        this.Wo = randomMatrix(this.recurrentStateSize, combinedInputSize, weightScale);
+        const safeRandomMatrix = (rows, cols, scale) => {
+            rows = Math.max(1, rows);
+            cols = Math.max(1, cols);
+            const flatData = new Float32Array(rows * cols);
+            for (let i = 0; i < flatData.length; i++) flatData[i] = (Math.random() * 2 - 1) * scale;
+            return { flatData, rows, cols };
+        };
 
-        [this.Wf, this.Wi, this.Wc, this.Wo].forEach((m, i) => {
-            if (!isFiniteMatrix(m)) {
-                console.error(`ERROR: Non-finite LSTM weight matrix detected at index ${i} during OWM construction. Reinitializing to zeros.`, m);
-                logger.error(`Non-finite LSTM weight matrix detected at index ${i}; reinitializing to zeros.`);
-                m.forEach(row => row.fill(0));
-            }
-        });
+        // LSTM weights
+        this.Wf = safeRandomMatrix(this.recurrentStateSize, combinedInputSize, weightScale);
+        this.Wi = safeRandomMatrix(this.recurrentStateSize, combinedInputSize, weightScale);
+        this.Wc = safeRandomMatrix(this.recurrentStateSize, combinedInputSize, weightScale);
+        this.Wo = safeRandomMatrix(this.recurrentStateSize, combinedInputSize, weightScale);
 
+        // Biases
         this.bf = vecZeros(this.recurrentStateSize);
         this.bi = vecZeros(this.recurrentStateSize);
         this.bc = vecZeros(this.recurrentStateSize);
         this.bo = vecZeros(this.recurrentStateSize);
-        [this.bf, this.bi, this.bc, this.bo].forEach((v, i) => {
-            if (!isFiniteVector(v)) {
-                console.warn(`WARN: Non-finite LSTM bias vector detected at index ${i} during OWM construction. Setting to zeros.`, v);
-                logger.warn(`Non-finite LSTM bias vector detected at index ${i}; setting to zeros.`);
-                v.fill(0);
-            }
-        });
 
+        // Actor / Critic / State heads
         const actorOutputScale = Math.sqrt(2.0 / (this.recurrentStateSize + this.actionDim));
-        this.actorHead = { W: randomMatrix(this.actionDim, this.recurrentStateSize, actorOutputScale), b: vecZeros(this.actionDim) };
+        this.actorHead = { W: safeRandomMatrix(this.actionDim, this.recurrentStateSize, actorOutputScale), b: vecZeros(this.actionDim) };
 
         const criticOutputScale = Math.sqrt(2.0 / (this.recurrentStateSize + 1));
-        this.criticHead = { W: randomMatrix(1, this.recurrentStateSize, criticOutputScale), b: vecZeros(1) };
+        this.criticHead = { W: safeRandomMatrix(1, this.recurrentStateSize, criticOutputScale), b: vecZeros(1) };
 
         const statePredScale = Math.sqrt(2.0 / (this.recurrentStateSize + this.stateDim));
-        this.statePredHead = { W: randomMatrix(this.stateDim, this.recurrentStateSize, statePredScale), b: vecZeros(this.stateDim) };
+        this.statePredHead = { W: safeRandomMatrix(this.stateDim, this.recurrentStateSize, statePredScale), b: vecZeros(this.stateDim) };
 
         const varScale = Math.sqrt(2.0 / (this.recurrentStateSize + this.stateDim));
-        this.varianceHead = { W: randomMatrix(this.stateDim, this.recurrentStateSize, varScale), b: vecZeros(this.stateDim) };
-        if (!isFiniteMatrix(this.varianceHead.W) || !isFiniteVector(this.varianceHead.b)) {
-            console.error('ERROR: Non-finite variance head detected during OWM initialization; reinitializing to zeros.', this.varianceHead);
-            logger.error('Non-finite variance head detected during initialization; reinitializing to zeros.');
-            this.varianceHead.W.forEach(row => row.fill(0));
-            this.varianceHead.b.fill(0);
-        }
+        this.varianceHead = { W: safeRandomMatrix(this.stateDim, this.recurrentStateSize, varScale), b: vecZeros(this.stateDim) };
 
         const anticipatoryScale = Math.sqrt(2.0 / (this.recurrentStateSize + 1));
-        this.anticipatoryHead = { W: randomMatrix(1, this.recurrentStateSize, anticipatoryScale), b: vecZeros(1) };
+        this.anticipatoryHead = { W: safeRandomMatrix(1, this.recurrentStateSize, anticipatoryScale), b: vecZeros(1) };
 
-        this.attentionWeights = randomMatrix(nVertices, this.stateDim, 0.1);
+        // Attention
+        this.attentionWeights = safeRandomMatrix(nVertices, this.stateDim, 0.1);
         this.lastSoftmaxScores = vecZeros(nVertices);
-        this.coherencePrior = vecZeros(this.inputDim);
 
-        logger.info(`OWM network (re)initialized. New inputDim=${this.inputDim}`);
+        logger.info(`OWM network initialized: inputDim=${this.inputDim}, recurrentStateSize=${this.recurrentStateSize}`);
+    }
+
+    /**
+     * Safe matrix-vector multiplication wrapper.
+     */
+    safeMatVecMul(matrix, vector) {
+        if (!matrix || !matrix.flatData || matrix.rows <= 0 || matrix.cols <= 0 || !isFiniteVector(vector) || vector.length !== matrix.cols) {
+            console.warn('safeMatVecMul: Invalid matrix or vector mismatch.', { matrix, vectorLength: vector?.length });
+            logger.warn('safeMatVecMul: Invalid matrix or vector mismatch.');
+            return vecZeros(matrix?.rows || 1);
+        }
+        const result = new Float32Array(matrix.rows);
+        for (let i = 0; i < matrix.rows; i++) {
+            let sum = 0;
+            for (let j = 0; j < matrix.cols; j++) {
+                sum += matrix.flatData[i * matrix.cols + j] * vector[j];
+            }
+            result[i] = sum;
+        }
+        return isFiniteVector(result) ? result : vecZeros(matrix.rows);
+    }
+
+    /**
+     * Applies attention mechanism to input, enhanced with sheaf stalk data.
+     */
+    applyAttention(input) {
+        if (!isFiniteVector(input) || input.length !== this.stateDim) {
+            console.warn('OWM.applyAttention: Invalid input. Returning zeros.');
+            logger.warn('OWM.applyAttention: Invalid input.');
+            this.lastSoftmaxScores = vecZeros(Math.max(1, this.qualiaSheaf.complex.vertices.length));
+            return vecZeros(this.stateDim);
+        }
+
+        const nVertices = Math.max(1, this.qualiaSheaf.complex.vertices.length);
+        if (!this.attentionWeights || !this.attentionWeights.flatData || this.attentionWeights.rows !== nVertices || this.attentionWeights.cols !== this.stateDim) {
+            console.warn(`OWM.applyAttention: attentionWeights invalid. Reinitializing ${nVertices}x${this.stateDim}`);
+            logger.warn(`OWM.applyAttention: attentionWeights invalid. Reinitializing.`);
+            const flatData = new Float32Array(nVertices * this.stateDim);
+            for (let i = 0; i < flatData.length; i++) flatData[i] = (Math.random() * 0.2 - 0.1);
+            this.attentionWeights = { flatData, rows: nVertices, cols: this.stateDim };
+        }
+
+        const scores = new Float32Array(nVertices);
+        for (let i = 0; i < nVertices; i++) {
+            const row = this.attentionWeights.flatData.subarray(i * this.stateDim, (i + 1) * this.stateDim);
+            scores[i] = dot(row, input);
+            const vertex = this.qualiaSheaf.complex.vertices[i];
+            if (this.qualiaSheaf.stalks.has(vertex)) {
+                const stalkData = this.qualiaSheaf.stalks.get(vertex);
+                if (isFiniteVector(stalkData) && stalkData.length >= 3) {
+                    scores[i] += 0.1 * (isFiniteNumber(stalkData[2]) ? stalkData[2] : 0);
+                }
+            }
+        }
+
+        if (!isFiniteVector(scores)) {
+            console.warn('OWM.applyAttention: Scores became non-finite. Returning zeros.');
+            logger.warn('OWM.applyAttention: Scores became non-finite.');
+            this.lastSoftmaxScores.fill(0);
+            return vecZeros(this.stateDim);
+        }
+
+        this.lastSoftmaxScores = softmax(scores);
+        const att = vecZeros(this.stateDim);
+        for (let i = 0; i < nVertices; i++) {
+            for (let j = 0; j < this.stateDim; j++) {
+                att[j] += (this.lastSoftmaxScores[i] || 0) * (input[j] || 0);
+            }
+        }
+
+        const beta = isFiniteNumber(this.qualiaSheaf.beta) ? this.qualiaSheaf.beta : 0.1;
+        const weighted = vecAdd(input, vecScale(att, beta));
+        return new Float32Array(isFiniteVector(weighted) ? weighted.map(v => clamp(v, -100, 100)) : vecZeros(this.stateDim));
     }
 
     /**
@@ -124,6 +201,9 @@ export class OntologicalWorldModel {
         }
     }
 
+    /**
+     * Initializes the OWM, ensuring the sheaf is ready.
+     */
     async initialize() {
         logger.info(`OWM.initialize() (${this.isPlayerTwo ? 'AI' : 'Player'}) called.`);
         try {
@@ -142,182 +222,135 @@ export class OntologicalWorldModel {
         }
     }
 
+    /**
+     * Combines raw state vector with qualia vector for full input.
+     */
     _getFullInputVector(rawStateVector) {
-        if (!isFiniteVector(rawStateVector) || rawStateVector.length !== this.stateDim) {
-            console.error('OWM._getFullInputVector: Invalid rawStateVector. Returning zeros.', { rawStateVector });
-            logger.error('OWM._getFullInputVector: Invalid rawStateVector. Returning zeros.', { rawStateVector });
-            return vecZeros(this.inputDim);
-        }
-
-        const attentionalInput = this.applyAttention(rawStateVector);
-        const qualiaVector = this.qualiaSheaf.getStalksAsVector();
-        if (!isFiniteVector(qualiaVector) || qualiaVector.length !== this.expectedQualiaInputLength) {
-            console.error('OWM._getFullInputVector: Invalid qualiaVector from sheaf. Resetting and returning zeros.', { qualiaVector, expected: this.expectedQualiaInputLength, got: qualiaVector.length });
-            logger.error('OWM._getFullInputVector: Invalid qualiaVector from sheaf. Resetting and returning zeros.', { qualiaVector });
-            this.qualiaSheaf.stalks.forEach((stalk, key) => {
-                if (!isFiniteVector(stalk)) {
-                    this.qualiaSheaf.stalks.set(key, vecZeros(this.qDim));
-                }
-            });
-            return vecZeros(this.inputDim);
-        }
-
-        const fullInput = new Float32Array(this.inputDim);
-        fullInput.set(attentionalInput.slice(0, this.stateDim), 0);
-        fullInput.set(qualiaVector, this.stateDim);
-
-        if (!isFiniteVector(fullInput)) {
-            console.error('OWM._getFullInputVector: Generated fullInput is non-finite. Returning zeros.', { fullInput });
-            logger.error('OWM._getFullInputVector: Generated fullInput is non-finite. Returning zeros.', { fullInput });
-            return vecZeros(this.inputDim);
-        }
-        return fullInput;
-    }
-
-    applyAttention(input) {
-        if (!isFiniteVector(input) || input.length !== this.stateDim) {
-            console.error('OWM.applyAttention: Invalid input dimension or non-finite. Returning zeros.', { expected: this.stateDim, got: input.length, input_finite: isFiniteVector(input) });
-            logger.error('OWM.applyAttention: Invalid input dimension or non-finite. Returning zeros.');
-            this.lastSoftmaxScores.fill(0);
-            return vecZeros(this.stateDim);
-        }
-
-        const nVertices = this.qualiaSheaf.complex.vertices.length;
-        if (!this.attentionWeights || this.attentionWeights.length !== nVertices || (this.attentionWeights.length > 0 && this.attentionWeights[0].length !== this.stateDim)) {
-            console.warn(`OWM.applyAttention: attentionWeights have incorrect dimensions (${this.attentionWeights?.length}x${this.attentionWeights[0]?.length}). Reinitializing to ${nVertices}x${this.stateDim}.`);
-            this.attentionWeights = randomMatrix(nVertices, this.stateDim, 0.1);
-            this.lastSoftmaxScores = vecZeros(nVertices);
-        }
-
-        const scores = this.qualiaSheaf.complex.vertices.map((vertex, i) => {
-            const weights_row = this.attentionWeights[i];
-            const compatible_w_row = weights_row.slice(0, input.length);
-            let score = dot(compatible_w_row, input);
-            if (this.qualiaSheaf.stalks.has(vertex)) {
-                const stalkData = this.qualiaSheaf.stalks.get(vertex);
-                if (isFiniteVector(stalkData)) {
-                    score += 0.1 * (stalkData[2] || 0);
-                }
-            }
-            return score;
+    if (!isFiniteVector(rawStateVector) || rawStateVector.length !== this.stateDim) {
+        logger.error('OWM._getFullInputVector: Invalid rawStateVector. Returning zeros.', {
+            rawStateVector: rawStateVector?.slice(0, 10),
+            length: rawStateVector?.length
         });
-
-        if (!isFiniteVector(scores)) {
-            console.warn('OWM.applyAttention: Scores became non-finite. Returning zeros.', { scores });
-            logger.warn('OWM.applyAttention: Scores became non-finite. Returning zeros.');
-            this.lastSoftmaxScores.fill(0);
-            return vecZeros(this.stateDim);
-        }
-
-        this.lastSoftmaxScores = softmax(new Float32Array(scores));
-        const att = vecZeros(input.length);
-        for (let i = 0; i < this.lastSoftmaxScores.length; i++) {
-            for (let j = 0; j < input.length; j++) {
-                att[j] += (this.lastSoftmaxScores[i] || 0) * (input[j] || 0);
-            }
-        }
-        const weightedAttended = vecAdd(input, vecScale(att, this.qualiaSheaf.beta));
-        return new Float32Array(isFiniteVector(weightedAttended) ? weightedAttended.map(v => clamp(v, -100, 100)) : vecZeros(this.stateDim));
+        return vecZeros(this.inputDim);
     }
 
-    async forward(input, recurrentInput = null) {
-        if (!this.ready) {
-            console.warn('OWM.forward: Not ready; returning corrupted.');
-            logger.warn('OWM.forward: Not ready; returning corrupted.');
-            return { corrupted: true };
-        }
+    const attentionalInput = this.applyAttention(rawStateVector);
+    const qualiaVector = this.qualiaSheaf.getStalksAsVector();
+    if (!isFiniteVector(qualiaVector) || qualiaVector.length !== this.expectedQualiaInputLength) {
+        logger.warn('OWM._getFullInputVector: Invalid qualiaVector. Resetting stalks.', {
+            qualiaVector: qualiaVector?.slice(0, 10),
+            expected: this.expectedQualiaInputLength,
+            nonFiniteCount: qualiaVector?.filter(x => !Number.isFinite(x)).length
+        });
+        this.qualiaSheaf.stalks.forEach((_, key) => {
+            this.qualiaSheaf.stalks.set(key, new Array(this.qDim).fill(0).map((_, i) => i === 0 ? 0.5 : 0));
+        });
+        return vecZeros(this.inputDim);
+    }
 
-        this._checkAndReinitializeNetwork();
+    const fullInput = new Float32Array(this.inputDim);
+    fullInput.set(attentionalInput.slice(0, this.stateDim), 0);
+    fullInput.set(qualiaVector, this.stateDim);
 
+    if (!isFiniteVector(fullInput)) {
+        logger.error('OWM._getFullInputVector: Non-finite fullInput. Returning zeros.', {
+            fullInput: fullInput.slice(0, 10),
+            nonFiniteCount: fullInput.filter(x => !Number.isFinite(x)).length
+        });
+        return vecZeros(this.inputDim);
+    }
+    return fullInput.map(v => clamp(v, -100, 100));
+}
+
+    /**
+     * Forward pass through the LSTM network with robust error handling.
+     */
+    async forward(input, hPrev = this.hiddenState, cPrev = this.cellState) {
+    try {
         if (!isFiniteVector(input) || input.length !== this.inputDim) {
-            console.error('OWM.forward: Invalid input for current network dimensions. Returning corrupted.', { expected: this.inputDim, got: input.length });
-            logger.error('OWM.forward: Invalid input for current network dimensions. Returning corrupted.', { expected: this.inputDim, got: input.length });
-            this.resetRecurrentState();
-            return { corrupted: true };
+            console.warn(`OWM.forward: Invalid input length. Expected ${this.inputDim}, got ${input?.length}. Using zeros.`);
+            logger.warn('OWM.forward: Invalid input length.');
+            input = vecZeros(this.inputDim);
         }
 
-        const hPrev = recurrentInput || this.hiddenState;
-        const cPrev = recurrentInput ? vecZeros(this.recurrentStateSize) : this.cellState;
-        const combinedInput = new Float32Array([...input, ...hPrev]);
-
-        const [fPre, iPre, cPre, oPre] = await Promise.all([
-            runWorkerTask('matVecMul', { matrix: flattenMatrix(this.Wf), vector: combinedInput }),
-            runWorkerTask('matVecMul', { matrix: flattenMatrix(this.Wi), vector: combinedInput }),
-            runWorkerTask('matVecMul', { matrix: flattenMatrix(this.Wc), vector: combinedInput }),
-            runWorkerTask('matVecMul', { matrix: flattenMatrix(this.Wo), vector: combinedInput })
-        ]);
-
-        const forgetGate = sigmoidVec(vecAdd(fPre, this.bf));
-        const inputGate = sigmoidVec(vecAdd(iPre, this.bi));
-        const candidateCell = tanhVec(vecAdd(cPre, this.bc));
-        const outputGate = sigmoidVec(vecAdd(oPre, this.bo));
-
-        if (![forgetGate, inputGate, candidateCell, outputGate].every(isFiniteVector)) {
-            console.error('OWM.forward: Non-finite LSTM gates detected; resetting state and returning safe defaults.', { forgetGate, inputGate, candidateCell, outputGate });
-            logger.error('OWM.forward: Non-finite LSTM gates detected; resetting state and returning safe defaults.');
-            this.resetRecurrentState();
-            return { corrupted: true };
+        const combinedInput = new Float32Array(this.inputDim + this.recurrentStateSize);
+        if (!isFiniteVector(hPrev) || hPrev.length !== this.recurrentStateSize) {
+            console.warn(`OWM.forward: Invalid hPrev length. Expected ${this.recurrentStateSize}, got ${hPrev?.length}. Using zeros.`);
+            hPrev = vecZeros(this.recurrentStateSize);
         }
+        combinedInput.set(input, 0);
+        combinedInput.set(hPrev, this.inputDim);
 
-        this.cellState = vecAdd(vecMul(forgetGate, cPrev), vecMul(inputGate, candidateCell));
-        this.hiddenState = vecMul(outputGate, tanhVec(this.cellState));
+        // LSTM pre-activations
+        const fPre = vecAdd(this.safeMatVecMul(this.Wf, combinedInput), this.bf);
+        const iPre = vecAdd(this.safeMatVecMul(this.Wi, combinedInput), this.bi);
+        const cPre = vecAdd(this.safeMatVecMul(this.Wc, combinedInput), this.bc);
+        const oPre = vecAdd(this.safeMatVecMul(this.Wo, combinedInput), this.bo);
 
-        if (!isFiniteVector(this.cellState) || !isFiniteVector(this.hiddenState)) {
-            console.error('OWM.forward: Non-finite LSTM cell or hidden state detected; resetting state.', { cellState: this.cellState, hiddenState: this.hiddenState });
-            logger.error('OWM.forward: Non-finite LSTM cell or hidden state detected; resetting state.');
-            this.resetRecurrentState();
-            return { corrupted: true };
-        }
+        // LSTM gate activations
+        const f = sigmoidVec(fPre);
+        const i = sigmoidVec(iPre);
+        const cBar = tanhVec(cPre);
+        const cNext = vecAdd(vecMul(f, cPrev), vecMul(i, cBar));
+        const o = sigmoidVec(oPre);
+        const hNext = vecMul(o, tanhVec(cNext));
 
-        const [rawActionLogits, rawStateValue, rawNextState, rawLogVar, rawAnticipatory] = await Promise.all([
-            runWorkerTask('matVecMul', { matrix: flattenMatrix(this.actorHead.W), vector: this.hiddenState }),
-            runWorkerTask('matVecMul', { matrix: flattenMatrix(this.criticHead.W), vector: this.hiddenState }),
-            runWorkerTask('matVecMul', { matrix: flattenMatrix(this.statePredHead.W), vector: this.hiddenState }),
-            runWorkerTask('matVecMul', { matrix: flattenMatrix(this.varianceHead.W), vector: this.hiddenState }),
-            runWorkerTask('matVecMul', { matrix: flattenMatrix(this.anticipatoryHead.W), vector: this.hiddenState })
-        ]);
+        // Update internal states
+        this.hiddenState = hNext;
+        this.cellState = cNext;
 
-        const actionLogits = vecAdd(rawActionLogits, this.actorHead.b);
-        const stateValue = vecAdd(rawStateValue, this.criticHead.b)[0] || 0;
-        const nextStatePrediction = vecAdd(rawNextState, this.statePredHead.b);
-        const logVar = vecAdd(rawLogVar, this.varianceHead.b);
-        const anticipatoryReward = vecAdd(rawAnticipatory, this.anticipatoryHead.b)[0] || 0;
-        const variance = new Float32Array(logVar.map(v => Math.max(Math.exp(clamp(v, -20, 20)), 1e-6)));
-
-        if (!isFiniteVector(actionLogits) || !Number.isFinite(stateValue) || !isFiniteVector(nextStatePrediction) || !isFiniteVector(variance) || !Number.isFinite(anticipatoryReward)) {
-            console.error('OWM.forward: Non-finite outputs from heads detected. Returning corrupted.', { actionLogits, stateValue, nextStatePrediction, variance, anticipatoryReward });
-            logger.error('OWM.forward: Non-finite outputs from heads detected. Returning corrupted.');
-            this.resetRecurrentState();
-            return { corrupted: true };
-        }
-
-        const activations = [input.slice(), this.cellState.slice(), this.hiddenState.slice(), actionLogits.slice()];
+        // Head outputs
+        const actionLogits = vecAdd(this.safeMatVecMul(this.actorHead.W, hNext), this.actorHead.b);
+        const stateValue = this.safeMatVecMul(this.criticHead.W, hNext)[0] + this.criticHead.b[0];
+        const nextStateRaw = vecAdd(this.safeMatVecMul(this.statePredHead.W, hNext), this.statePredHead.b);
+        const variance = vecAdd(this.safeMatVecMul(this.varianceHead.W, hNext), this.varianceHead.b);
+        const anticipatoryReward = this.safeMatVecMul(this.anticipatoryHead.W, hNext)[0] + this.anticipatoryHead.b[0];
 
         return {
             actionLogits,
             stateValue,
-            nextStatePrediction: this._formatStatePrediction(nextStatePrediction),
-            variance,
-            anticipatoryReward,
-            activations,
+            nextStatePrediction: this._formatStatePrediction(nextStateRaw),
+            variance: variance.map(v => clamp(Math.abs(v), 0, 10)),
+            anticipatoryReward: clamp(anticipatoryReward, -10, 10),
+            activations: hNext,
             corrupted: false
         };
+    } catch (e) {
+        console.error(`OWM.forward: CRITICAL ERROR: ${e.message}. Resetting recurrent state.`);
+        logger.error(`OWM.forward: CRITICAL ERROR: ${e.message}.`);
+        this.resetRecurrentState();
+        return {
+            corrupted: true,
+            actionLogits: vecZeros(this.actionDim),
+            stateValue: 0,
+            nextStatePrediction: this._formatStatePrediction(vecZeros(this.stateDim)),
+            variance: vecZeros(this.stateDim),
+            anticipatoryReward: 0,
+            activations: vecZeros(this.recurrentStateSize)
+        };
     }
+}
 
+    /**
+     * Formats state prediction for game compatibility.
+     */
     _formatStatePrediction(stateVector) {
         if (!isFiniteVector(stateVector) || stateVector.length < 3) {
-            console.warn('OWM._formatStatePrediction: Invalid stateVector; returning default state.', { stateVector });
-            logger.warn('OWM._formatStatePrediction: Invalid stateVector; returning default state.', { stateVector });
+            console.warn('OWM._formatStatePrediction: Invalid stateVector; returning default state.');
+            logger.warn('OWM._formatStatePrediction: Invalid stateVector; returning default state.');
             return { x: 0, z: 0, rot: 0, raw: vecZeros(this.stateDim) };
         }
         return {
             x: clamp(stateVector[0], -50, 50),
             z: clamp(stateVector[1], -50, 50),
             rot: clamp(stateVector[2], 0, 2 * Math.PI),
-            raw: stateVector
+            raw: stateVector.map(v => clamp(v, -100, 100))
         };
     }
 
+    /**
+     * Predicts the next state given a raw state vector.
+     */
     async predictNextState(rawStateVector) {
         if (!this.ready) {
             console.warn('OWM.predictNextState: Not ready; returning default state.');
@@ -346,43 +379,39 @@ export class OntologicalWorldModel {
         return nextStatePrediction;
     }
 
+    /**
+     * Computes softmax probabilities for action selection.
+     */
     softmax(actionProbs) {
         if (!isFiniteVector(actionProbs)) {
             console.warn('OWM.softmax: Input actionProbs are not finite. Returning uniform probabilities.');
-            logger.warn('OWM.softmax: Input actionProbs are not finite. Returning uniform probabilities.');
+            logger.warn('OWM.softmax: Input actionProbs are not finite.');
             return vecZeros(this.actionDim).fill(1 / this.actionDim);
         }
 
         const maxProb = Math.max(...actionProbs);
-        if (!Number.isFinite(maxProb)) {
-            console.warn('OWM.softmax: maxProb is non-finite. Returning uniform probabilities.', { maxProb, actionProbs });
-            logger.warn('OWM.softmax: maxProb is non-finite. Returning uniform probabilities.');
+        if (!isFiniteNumber(maxProb)) {
+            console.warn('OWM.softmax: maxProb is non-finite. Returning uniform probabilities.', { maxProb });
+            logger.warn('OWM.softmax: maxProb is non-finite.');
             return vecZeros(this.actionDim).fill(1 / this.actionDim);
         }
 
-        const exp_logits = new Float32Array(actionProbs.length);
-        for (let i = 0; i < actionProbs.length; i++) {
-            const val = Math.exp(actionProbs[i] - maxProb);
-            exp_logits[i] = Number.isFinite(val) ? val : 0;
-        }
+        const exp_logits = actionProbs.map(v => Math.exp(v - maxProb));
+        const sum_exp_logits = exp_logits.reduce((sum, val) => sum + (isFiniteNumber(val) ? val : 0), 0);
+        const safe_sum_exp_logits = (isFiniteNumber(sum_exp_logits) && sum_exp_logits > 1e-9) ? sum_exp_logits : 1e-9;
 
-        let sum_exp_logits = exp_logits.reduce((sum, val) => sum + val, 0);
-        const safe_sum_exp_logits = (Number.isFinite(sum_exp_logits) && sum_exp_logits > 1e-9) ? sum_exp_logits : 1e-9;
-
-        const resultProbs = new Float32Array(actionProbs.length);
-        for (let i = 0; i < actionProbs.length; i++) {
-            const val = exp_logits[i] / safe_sum_exp_logits;
-            resultProbs[i] = Number.isFinite(val) ? val : 0;
-        }
-
+        const resultProbs = exp_logits.map(v => (isFiniteNumber(v) ? v : 0) / safe_sum_exp_logits);
         if (!isFiniteVector(resultProbs)) {
-            console.warn('OWM.softmax: Output probabilities are not finite after calculation. Returning uniform probabilities.');
-            logger.warn('OWM.softmax: Output probabilities are not finite after calculation. Returning uniform probabilities.');
+            console.warn('OWM.softmax: Output probabilities are not finite. Returning uniform probabilities.');
+            logger.warn('OWM.softmax: Output probabilities are not finite.');
             return vecZeros(this.actionDim).fill(1 / this.actionDim);
         }
-        return resultProbs;
+        return new Float32Array(resultProbs);
     }
 
+    /**
+     * Chooses an action based on the state vector and exploration parameter.
+     */
     async chooseAction(rawStateVector, epsilon = 0.1) {
         if (!this.ready) {
             console.warn('OWM.chooseAction: Not ready; returning default action.');
@@ -424,8 +453,8 @@ export class OntologicalWorldModel {
         const { actionLogits, stateValue, nextStatePrediction, variance, anticipatoryReward, activations, corrupted } = forwardResult;
 
         if (corrupted) {
-            console.error('OWM.chooseAction: Forward pass reported corrupted outputs. Resetting state.', forwardResult);
-            logger.error('OWM.chooseAction: Forward pass reported corrupted outputs. Resetting state.');
+            console.error('OWM.chooseAction: Forward pass reported corrupted outputs. Resetting state.');
+            logger.error('OWM.chooseAction: Forward pass reported corrupted outputs.');
             this.resetRecurrentState();
             return {
                 action: 'IDLE',
@@ -440,7 +469,7 @@ export class OntologicalWorldModel {
             };
         }
 
-        const temperature = 1.0 / (1 + this.freeEnergy);
+        const temperature = clamp(1.0 / (1 + this.freeEnergy), 0.1, 2.0);
         const actionProbs = this.softmax(vecScale(actionLogits, 1 / temperature));
 
         const actionIndex = Math.random() < epsilon
@@ -467,6 +496,9 @@ export class OntologicalWorldModel {
         };
     }
 
+    /**
+     * Computes free energy based on prediction error and sheaf properties.
+     */
     async computeFreeEnergy(nextRawStateVector, predictedState) {
         if (!isFiniteVector(nextRawStateVector) || !isFiniteVector(predictedState.raw)) {
             this.freeEnergy = 1.0;
@@ -475,93 +507,136 @@ export class OntologicalWorldModel {
             return;
         }
         const klProxy = norm2(vecSub(nextRawStateVector, predictedState.raw)) * 0.1;
-        const sheafInconsistency = this.qualiaSheaf.inconsistency || 0;
-        const coherenceReduction = (this.qualiaSheaf.coherence || 0) * 0.5;
+        const sheafInconsistency = isFiniteNumber(this.qualiaSheaf.inconsistency) ? this.qualiaSheaf.inconsistency : 0;
+        const coherenceReduction = isFiniteNumber(this.qualiaSheaf.coherence) ? this.qualiaSheaf.coherence * 0.5 : 0;
         this.freeEnergy = clamp(klProxy + sheafInconsistency - coherenceReduction, 0, 10);
     }
 
-    async learn(tdError, targetValue, nextRawStateVector, lr, prior = null) {
-        if (!this.ready) {
-            console.warn('OWM.learn: Not ready; returning zero losses.');
-            logger.warn('OWM.learn: Not ready; returning zero losses.');
-            this.actorLoss = 0;
-            this.criticLoss = 0;
-            this.predictionLoss = 0;
-            return { actorLoss: 0, criticLoss: 0, predictionLoss: 0 };
-        }
-
-        const nextFullInput = this._getFullInputVector(nextRawStateVector);
-        let forwardResult;
-        try {
-            forwardResult = await this.forward(nextFullInput);
-        } catch (e) {
-            console.error('OWM.learn: Error during forward pass for next state prediction:', e);
-            logger.error('OWM.learn: Error during forward pass for next state prediction:', e);
-            this.predictionError = 1.0;
-            forwardResult = { nextStatePrediction: this._formatStatePrediction(vecZeros(this.stateDim)), corrupted: true };
-        }
-
-        const { nextStatePrediction, corrupted: predictionCorrupted } = forwardResult;
-
-        if (predictionCorrupted || !isFiniteVector(nextRawStateVector) || !isFiniteVector(nextStatePrediction.raw)) {
-            console.warn('OWM.learn: Invalid nextRawStateVector or nextStatePrediction for prediction loss. Setting to 1.0.', { nextRawStateVector, nextStatePrediction });
-            logger.warn('OWM.learn: Invalid nextRawStateVector or nextStatePrediction for prediction loss. Setting to 1.0.');
-            this.predictionError = 1.0;
-        } else {
-            this.predictionError = norm2(vecSub(nextRawStateVector, nextStatePrediction.raw)) * 0.1;
-            this.predictionError = clamp(this.predictionError, 0, 10);
-        }
-
-        await this.computeFreeEnergy(nextRawStateVector, nextStatePrediction);
-
-        let modulatedTdError = tdError;
-        if (prior && isFiniteVector(prior)) {
-            const priorInfluence = dot(prior.slice(0, this.actionDim), vecZeros(this.actionDim)) * (this.qualiaSheaf.coherence || 0.5);
-            modulatedTdError += priorInfluence * 0.1;
-            modulatedTdError = clamp(modulatedTdError, -10, 10);
-        }
-
-        const simulatedActorLoss = Math.abs(modulatedTdError) * 0.1 + Math.random() * 0.001;
-        const simulatedCriticLoss = Math.abs(modulatedTdError) * 0.05 + Math.random() * 0.001;
-        const totalPredictionLoss = this.predictionError + Math.random() * 0.001;
-
-        this.actorLoss = clamp(simulatedActorLoss, 0, 10);
-        this.criticLoss = clamp(simulatedCriticLoss, 0, 10);
-        this.predictionLoss = clamp(totalPredictionLoss, 0, 10);
-
-        this.coherencePrior = vecAdd(this.coherencePrior, vecScale(this.hiddenState, lr * (this.qualiaSheaf.coherence || 0)));
-
-        if (this.qualiaSheaf.ready) {
-            await this.qualiaSheaf.diffuseQualia(nextRawStateVector);
-        } else {
-            console.warn('OWM.learn: QualiaSheaf not ready for diffusion during learning. Skipping diffusion.');
-            logger.warn('OWM.learn: QualiaSheaf not ready for diffusion during learning. Skipping diffusion.');
-        }
-
-        return {
-            actorLoss: this.actorLoss,
-            criticLoss: this.criticLoss,
-            predictionLoss: this.predictionLoss
-        };
+    /**
+     * Updates the model based on temporal difference error and prior.
+     */
+     async learn(tdError, targetValue, nextRawStateVector, lr, prior = null) {
+    if (!this.ready) {
+        logger.warn('OWM.learn: Not ready; returning zero losses.');
+        this.actorLoss = 0;
+        this.criticLoss = 0;
+        this.predictionLoss = 0;
+        return { actorLoss: 0, criticLoss: 0, predictionLoss: 0 };
     }
 
+    const nextFullInput = this._getFullInputVector(nextRawStateVector);
+    let forwardResult;
+    try {
+        forwardResult = await this.forward(nextFullInput);
+    } catch (e) {
+        logger.error('OWM.learn: Error during forward pass for next state prediction:', { error: e.message, stack: e.stack });
+        this.predictionError = 1.0;
+        forwardResult = { nextStatePrediction: this._formatStatePrediction(vecZeros(this.stateDim)), corrupted: true };
+    }
+
+    const { nextStatePrediction, corrupted: predictionCorrupted } = forwardResult;
+
+    if (predictionCorrupted || !isFiniteVector(nextRawStateVector) || !isFiniteVector(nextStatePrediction.raw)) {
+        logger.warn('OWM.learn: Invalid nextRawStateVector or nextStatePrediction.');
+        this.predictionError = 1.0;
+    } else {
+        this.predictionError = norm2(vecSub(nextRawStateVector, nextStatePrediction.raw)) * 0.1;
+        this.predictionError = clamp(this.predictionError, 0, 10);
+    }
+
+    await this.computeFreeEnergy(nextRawStateVector, nextStatePrediction);
+
+    let modulatedTdError = isFiniteNumber(tdError) ? tdError : 0;
+    if (prior && isFiniteVector(prior) && prior.length === this.actionDim) {
+        const priorInfluence = dot(prior, vecZeros(this.actionDim)) * (isFiniteNumber(this.qualiaSheaf.coherence) ? this.qualiaSheaf.coherence : 0.5);
+        modulatedTdError += priorInfluence * 0.1;
+        modulatedTdError = clamp(modulatedTdError, -10, 10);
+    }
+
+    const simulatedActorLoss = Math.abs(modulatedTdError) * 0.1 + Math.random() * 0.001;
+    const simulatedCriticLoss = Math.abs(modulatedTdError) * 0.05 + Math.random() * 0.001;
+    const totalPredictionLoss = this.predictionError + Math.random() * 0.001;
+
+    this.actorLoss = clamp(simulatedActorLoss, 0, 10);
+    this.criticLoss = clamp(simulatedCriticLoss, 0, 10);
+    this.predictionLoss = clamp(totalPredictionLoss, 0, 10);
+
+    const coherence = isFiniteNumber(this.qualiaSheaf.coherence) ? this.qualiaSheaf.coherence : 0;
+    
+    // --- START OF FIX: Ensure vector dimensions match before adding ---
+    if (!isFiniteVector(this.coherencePrior) || this.coherencePrior.length !== this.recurrentStateSize) {
+        logger.warn(`OWM.learn: Invalid coherencePrior. Expected length ${this.recurrentStateSize}, got ${this.coherencePrior?.length || 'undefined'}. Resetting.`);
+        this.coherencePrior = vecZeros(this.recurrentStateSize);
+    }
+    if (!isFiniteVector(this.hiddenState) || this.hiddenState.length !== this.recurrentStateSize) {
+        logger.warn(`OWM.learn: Invalid hiddenState. Expected length ${this.recurrentStateSize}, got ${this.hiddenState?.length || 'undefined'}. Resetting.`);
+        this.hiddenState = vecZeros(this.recurrentStateSize);
+    }
+    // --- END OF FIX ---
+
+    let scaledHiddenState = vecScale(this.hiddenState, lr * coherence);
+    this.coherencePrior = vecAdd(this.coherencePrior, scaledHiddenState);
+
+    if (this.qualiaSheaf.ready) {
+        try {
+            await this.qualiaSheaf.diffuseQualia(nextRawStateVector);
+        } catch (e) {
+            logger.warn('OWM.learn: QualiaSheaf diffusion failed. Skipping.', { error: e.message, stack: e.stack });
+        }
+    } else {
+        logger.warn('OWM.learn: QualiaSheaf not ready for diffusion. Skipping.');
+    }
+
+    return {
+        actorLoss: this.actorLoss,
+        criticLoss: this.criticLoss,
+        predictionLoss: this.predictionLoss
+    };
+}
+
+    /**
+     * Disposes of the OWM resources.
+     */
     dispose() {
         logger.info(`OWM for ${this.isPlayerTwo ? 'AI' : 'Player'} disposed.`);
     }
 
+    /**
+     * Resets the recurrent state of the network.
+     */
     resetRecurrentState() {
-        this.hiddenState = vecZeros(this.recurrentStateSize);
-        this.cellState = vecZeros(this.recurrentStateSize);
-        this.lastStateValue = 0;
-        this.predictionError = 0;
-        this.freeEnergy = 0;
-        this.actorLoss = 0;
-        this.criticLoss = 0;
-        this.predictionLoss = 0;
-        this.lastActionLogProbs = vecZeros(this.actionDim);
-        this.lastChosenActionLogProb = 0;
-        this.lastActivations = [];
-        this.coherencePrior = vecZeros(this.inputDim);
-        logger.info('OWM recurrent state reset with coherence prior.');
+    this.hiddenState = vecZeros(this.recurrentStateSize);
+    this.cellState = vecZeros(this.recurrentStateSize);
+    this.lastStateValue = 0;
+    this.predictionError = 0;
+    this.freeEnergy = 0;
+    this.actorLoss = 0;
+    this.criticLoss = 0;
+    this.predictionLoss = 0;
+    this.lastActionLogProbs = vecZeros(this.actionDim);
+    this.lastChosenActionLogProb = 0;
+    this.lastActivations = [];
+    // --- FIX: Initialize coherencePrior with the correct size ---
+    this.coherencePrior = vecZeros(this.recurrentStateSize);
+    this.lastSoftmaxScores = vecZeros(this.qualiaSheaf.complex.vertices.length);
+    logger.info('OWM recurrent state reset with coherence prior.');
+}
+
+    /**
+     * Retrieves Q-values for the given state (placeholder for compatibility).
+     */
+    async getQValues(stateVec) {
+        if (!isFiniteVector(stateVec) || stateVec.length !== this.stateDim) {
+            console.warn('OWM.getQValues: Invalid state vector. Returning zeros.');
+            logger.warn('OWM.getQValues: Invalid state vector.');
+            return vecZeros(this.actionDim);
+        }
+        const fullInput = this._getFullInputVector(stateVec);
+        const { actionLogits, corrupted } = await this.forward(fullInput).catch(e => {
+            console.error('OWM.getQValues: Forward pass error:', e);
+            logger.error('OWM.getQValues: Forward pass error:', e);
+            return { actionLogits: vecZeros(this.actionDim), corrupted: true };
+        });
+        return corrupted ? vecZeros(this.actionDim) : actionLogits;
     }
 }
