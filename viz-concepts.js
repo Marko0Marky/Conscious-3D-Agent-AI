@@ -415,7 +415,9 @@ export function renderConceptVisualization() {
 
     // Th. 17: Render Floquet PD every 30 frames
     if (Math.floor(clock.getElapsedTime() * 60) % 30 === 0) {
-        visualizeFloquetPD(scene, camera, renderer);
+        // FIX: The function call is corrected to pass the 'sheafInstance' object,
+        // which holds the actual cognitive data, instead of the 'scene' object.
+        visualizeFloquetPD(sheafInstance);
     }
 }
 
