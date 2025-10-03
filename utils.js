@@ -1,7 +1,62 @@
 // --- UTILS.JS (STABILITY-ENHANCED & COMPLETE - V9) ---
 // Fixes TypeScript errors in workerLogicString and runWorkerTask, removes type annotations,
 // ensures proper template literal closure, and optimizes complexEigenvalues for 56x56 matrices.
+export function safeVecScale(vector, scalar) {
+    if (!isFiniteVector(vector) || !isFiniteNumber(scalar) || !Number.isFinite(scalar)) {
+        
+        return vecZeros(vector?.length || 1);
+    }
+    const result = new Float32Array(vector.length);
+    for (let i = 0; i < vector.length; i++) {
+        result[i] = vector[i] * scalar;
+    }
+    return result;
+}
 
+
+export function _matMul(matrixA, matrixB) {
+    if (!isFiniteMatrix(matrixA) || !isFiniteMatrix(matrixB) || matrixA[0]?.length !== matrixB.length) {
+        const rows = matrixA?.length || 1;
+        const cols = matrixB?.[0]?.length || 1;
+        logger.warn(`_matMul: Invalid matrix multiplication. Returning ${rows}x${cols} zero matrix.`);
+        return zeroMatrix(rows, cols);
+    }
+    const C = zeroMatrix(matrixA.length, matrixB[0].length);
+    for (let i = 0; i < matrixA.length; i++) {
+        for (let j = 0; j < matrixB[0].length; j++) {
+            let sum = 0;
+            for (let k = 0; k < matrixA[0].length; k++) {
+                sum += (matrixA[i][k] || 0) * (matrixB[k][j] || 0);
+            }
+            C[i][j] = clamp(sum, -1e6, 1e6);
+        }
+    }
+    return C;
+}
+
+export function _transpose(matrix) {
+    if (!isFiniteMatrix(matrix) || matrix.length === 0) return [];
+    const result = zeroMatrix(matrix[0].length, matrix.length);
+    for (let i = 0; i < matrix.length; i++) {
+        for (let j = 0; j < matrix[0].length; j++) {
+            result[j][i] = matrix[i][j];
+        }
+    }
+    return result;
+}
+
+export function _matVecMul(matrix, vector) {
+    if (!isFiniteMatrix(matrix) || !isFiniteVector(vector) || matrix[0]?.length !== vector.length) {
+        return vecZeros(matrix?.length || 1);
+    }
+    const result = new Float32Array(matrix.length).fill(0);
+    for (let i = 0; i < matrix.length; i++) {
+        for (let j = 0; j < matrix[0].length; j++) {
+            result[i] += matrix[i][j] * vector[j];
+        }
+    }
+    return result;
+}
 const logElement = document.getElementById('log');
 const MAX_LOG_ENTRIES = 200;
 
