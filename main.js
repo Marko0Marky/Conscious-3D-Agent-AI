@@ -1,11 +1,14 @@
-import { logger, showLoading, hideLoading, clamp, isFiniteVector, norm2, vecZeros, vecAdd } from './utils.js';
+// =================================================================
+// IMPORTS
+// =================================================================
+import { logger, showLoading, hideLoading, clamp, isFiniteVector, vecZeros } from './utils.js';
 import { OntologicalWorldModel } from './owm.js';
 import { LearningAIAgent, StrategicAI } from './ai-agents.js';
 import { ThreeDeeGame } from './three-dee-game.js';
 import { NeuralNetworkVisualizer } from './nn-visualizer.js';
 import { initLive2D, updateLive2DEmotions, cleanupLive2D, isLive2DReady, updateLive2D } from './viz-live2d.js';
 import { initConceptVisualization, cleanupConceptVisualization, renderConceptVisualization, animateConceptNodes, isConceptVisualizationReady, updateAgentSimulationVisuals } from './viz-concepts.js';
-import { FloquetPersistentSheaf } from './qualia-sheaf.js';
+import { FloquetPersistentSheaf } from './sheaf/FloquetPersistentSheaf.js'; // <-- CORRECTED PATH
 import * as THREE from 'three';
 
 const tf = window.tf;
